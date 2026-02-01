@@ -1773,7 +1773,7 @@ def full_model_table(res, sample, instruments=None, star_mass=1.0):
     units = ['days', 'm/s', '', '', '']
     planet_names = ['b', 'd']
     pl = sample[ind['planets']]
-    samples = sort_planet_samples(res, res.posterior_sample[:['planets']])
+    samples = sort_planet_samples(res, res.posterior_sample[:, ind['planets']])
     lowerpl, medianpl, upperpl = np.percentile(samples, [16, 50, 84], axis=0)
 
     for pli in range(res.max_components):
