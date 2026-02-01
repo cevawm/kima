@@ -868,6 +868,7 @@ def reorder_P2(res, replace=False, passes=1):
     if res.model is MODELS.RVHGPMmodel:
         new_posterior.i = res.posteriors.i.copy()
         new_posterior.W = res.posteriors.W.copy()
+        new_posterior.Ω_deg = res.posteriors.Ω_deg.copy()
 
     mask = res.Np > 1
     Np = res.Np.copy().astype(int)
@@ -892,6 +893,10 @@ def reorder_P2(res, replace=False, passes=1):
                     new_posterior.w[i, ind] = new_posterior.w[i, ind][::-1]
                     new_posterior.φ[i, ind] = new_posterior.φ[i, ind][::-1]
                     s = _s
+                    if res.model is MODELS.RVHGPMmodel:
+                        new_posterior.i[i, ind] = new_posterior.i[i, ind][::-1]
+                        new_posterior.W[i, ind] = new_posterior.W[i, ind][::-1]
+                        new_posterior.Ω_deg[i, ind] = new_posterior.Ω_deg[i, ind][::-1]
                 else:
                     new_posterior.P[i, ind] = new_posterior.P[i, ind][::-1]
                 # input()
@@ -913,6 +918,10 @@ def reorder_P2(res, replace=False, passes=1):
         res.posteriors.e = new_posterior.e
         res.posteriors.w = new_posterior.w
         res.posteriors.φ = new_posterior.φ
+        if res.model is MODELS.RVHGPMmodel:
+            res.posteriors.i = new_posterior.i
+            res.posteriors.W = new_posterior.W
+            res.posteriors.Ω_deg = new_posterior.Ω_deg
 
     return new_posterior
     from .results import posterior_holder
@@ -997,6 +1006,159 @@ def reorder_P5(res, replace=False):
 
     return new_posterior
 
+def reorder_P2_all_perms(res, replace=False, passes=1):
+    from tqdm import trange, tqdm
+    from .results import posterior_holder
+    from itertools import permutations
+
+    # if res.max_components >= 4:
+    #     raise NotImplementedError('Only 2- or 3-planet solutions are supported')
+
+    new_posterior = posterior_holder()
+    new_posterior.P = res.posteriors.P.copy()
+    new_posterior.K = res.posteriors.K.copy()
+    new_posterior.e = res.posteriors.e.copy()
+    new_posterior.w = res.posteriors.w.copy()
+    new_posterior.φ = res.posteriors.φ.copy()
+    if res.model is MODELS.RVHGPMmodel:
+        new_posterior.i = res.posteriors.i.copy()
+        new_posterior.W = res.posteriors.W.copy()
+        new_posterior.Ω_deg = res.posteriors.Ω_deg.copy()
+
+    mask = res.Np > 1
+    Np = res.Np.copy().astype(int)
+
+    s = np.std(new_posterior.P, axis=0)
+    s_old = s.copy()
+
+    passes_done = 0
+    keep_going = True
+    while keep_going:
+        for i in tqdm(np.where(mask)[0]):
+            P_perms = np.array(list(permutations(new_posterior.P[i])))
+
+            
+            
+            # print(new_posterior.P[i])
+            _s = np.std(new_posterior.P, axis=0)
+            # print(_s, (_s < s)[j])
+            if (_s < s)[j]:
+                new_posterior.K[i, ind] = new_posterior.K[i, ind][::-1]
+                new_posterior.e[i, ind] = new_posterior.e[i, ind][::-1]
+                new_posterior.w[i, ind] = new_posterior.w[i, ind][::-1]
+                new_posterior.φ[i, ind] = new_posterior.φ[i, ind][::-1]
+                s = _s
+                if res.model is MODELS.RVHGPMmodel:
+                    new_posterior.i[i, ind] = new_posterior.i[i, ind][::-1]
+                    new_posterior.W[i, ind] = new_posterior.W[i, ind][::-1]
+                    new_posterior.Ω_deg[i, ind] = new_posterior.Ω_deg[i, ind][::-1]
+            else:
+                new_posterior.P[i, ind] = new_posterior.P[i, ind][::-1]
+            # input()
+
+        passes_done += 1
+        if passes != -1 and passes_done >= passes:
+            keep_going = False
+        if passes == -1:
+            if (s.round(2) < s_old.round(2)).any():
+                s_old = s
+                keep_going = True
+            else:
+                keep_going = False
+        # print(s)
+
+    if replace:
+        res.posteriors.P = new_posterior.P
+        res.posteriors.K = new_posterior.K
+        res.posteriors.e = new_posterior.e
+        res.posteriors.w = new_posterior.w
+        res.posteriors.φ = new_posterior.φ
+        if res.model is MODELS.RVHGPMmodel:
+            res.posteriors.i = new_posterior.i
+            res.posteriors.W = new_posterior.W
+            res.posteriors.Ω_deg = new_posterior.Ω_deg
+
+    return new_posterior
+
+
+def reorder_distance(res, ref_samples=None, replace=False):
+    from tqdm import trange, tqdm
+    from .results import posterior_holder
+    from itertools import permutations
+
+    #by default, get the maximum likelihood sample as reference
+    if ref_samples is None:
+        Np_detected = np_bayes_factor_threshold(res)
+        ref_samples = res.maximum_likelihood_sample(Np=Np_detected)
+
+    #not sure if we will still need this
+    new_posterior = posterior_holder()
+    new_posterior.P = res.posteriors.P.copy()
+    new_posterior.K = res.posteriors.K.copy()
+    new_posterior.e = res.posteriors.e.copy()
+    new_posterior.w = res.posteriors.w.copy()
+    new_posterior.φ = res.posteriors.φ.copy()
+    if res.model is MODELS.RVHGPMmodel:
+        new_posterior.i = res.posteriors.i.copy()
+        new_posterior.W = res.posteriors.W.copy()
+        new_posterior.Ω_deg = res.posteriors.Ω_deg.copy()
+
+    #extracting the period values from the reference sample, in order to calculate the distance,
+    #while also sorting them so that the first planet has the shortest period, etc.
+    P_ref_unsort = ref_samples[res.indices['planets.P']].copy()
+    P_ref_unsort[P_ref_unsort == 0]=np.nan
+    P_ref = np.sort(P_ref_unsort)
+
+    for i in tqdm(range(res.ESS)):
+        P_orig = new_posterior.P[i].copy()
+        P_orig[P_orig == 0] = np.nan
+        #generating all permutations of the current sample's periods
+        P_perms = np.array(list(permutations(P_orig)))
+
+        #calculating the distance between each permutation and the reference periods,
+        #and finding the permutation with the smallest summed distance for all planets
+        P_summed = np.nansum(np.abs(P_perms - P_ref), axis=1)
+        if np.all(P_summed == 0): #to take care of the case where the current sample matches the reference solution
+            print(i)
+            print(P_ref)
+            print(P_orig)
+            continue
+            # print(i)
+        else:
+            P_summed[P_summed == 0] = np.nan
+        P_new = P_perms[np.nanargmin(P_summed)]
+
+        #getting the indices of the selected permutation (relative to the original ordering),
+        #in order to reorder all other parameters accordingly
+        P_new_idx = np.argmax(  #the second conditional argument below is to account for nan values
+            (P_new[:, None] == P_orig) | (np.isnan(P_new)[:, None] & np.isnan(P_orig)),
+            axis=0
+        )
+
+        new_posterior.P[i] = new_posterior.P[i, P_new_idx]
+        new_posterior.K[i] = new_posterior.K[i, P_new_idx]
+        new_posterior.e[i] = new_posterior.e[i, P_new_idx]
+        new_posterior.w[i] = new_posterior.w[i, P_new_idx]
+        new_posterior.φ[i] = new_posterior.φ[i, P_new_idx]
+        if res.model is MODELS.RVHGPMmodel:
+            new_posterior.i[i] = new_posterior.i[i, P_new_idx]
+            new_posterior.W[i] = new_posterior.W[i, P_new_idx]
+            new_posterior.Ω_deg[i] = new_posterior.Ω_deg[i, P_new_idx]
+        
+
+        
+    if replace:
+        res.posteriors.P = new_posterior.P
+        res.posteriors.K = new_posterior.K
+        res.posteriors.e = new_posterior.e
+        res.posteriors.w = new_posterior.w
+        res.posteriors.φ = new_posterior.φ
+        if res.model is MODELS.RVHGPMmodel:
+            res.posteriors.i = new_posterior.i
+            res.posteriors.W = new_posterior.W
+            res.posteriors.Ω_deg = new_posterior.Ω_deg
+
+    return new_posterior
 
 def sort_planet_samples(res, byP=True, replace=False):
     # here we sort the planet_samples array by the orbital period
@@ -1611,7 +1773,7 @@ def full_model_table(res, sample, instruments=None, star_mass=1.0):
     units = ['days', 'm/s', '', '', '']
     planet_names = ['b', 'd']
     pl = sample[ind['planets']]
-    samples = sort_planet_samples(res, res.posterior_sample[:, ind['planets']])
+    samples = sort_planet_samples(res, res.posterior_sample[:['planets']])
     lowerpl, medianpl, upperpl = np.percentile(samples, [16, 50, 84], axis=0)
 
     for pli in range(res.max_components):
