@@ -1026,7 +1026,6 @@ def reorder_P2_all_perms(res, replace=False, passes=1):
         new_posterior.Ω_deg = res.posteriors.Ω_deg.copy()
 
     mask = res.Np > 1
-    Np = res.Np.copy().astype(int)
 
     s = np.std(new_posterior.P, axis=0)
     s_old = s.copy()
@@ -1035,32 +1034,36 @@ def reorder_P2_all_perms(res, replace=False, passes=1):
     keep_going = True
     while keep_going:
         for i in tqdm(np.where(mask)[0]):
-            P_perms = np.array(list(permutations(new_posterior.P[i])))
+            P_perms = np.array(list(permutations(range(0,len(new_posterior.P[i])))))
 
-            
-            
-            # print(new_posterior.P[i])
-            _s = np.std(new_posterior.P, axis=0)
-            # print(_s, (_s < s)[j])
-            if (_s < s)[j]:
-                new_posterior.K[i, ind] = new_posterior.K[i, ind][::-1]
-                new_posterior.e[i, ind] = new_posterior.e[i, ind][::-1]
-                new_posterior.w[i, ind] = new_posterior.w[i, ind][::-1]
-                new_posterior.φ[i, ind] = new_posterior.φ[i, ind][::-1]
-                s = _s
+            #creating a new array to use to calculate the std deviation of each planet period across all permutations for this specific sample
+            new_posterior_P_perms = np.asarray([new_posterior.P]*len(P_perms))
+            new_posterior_P_perms[:,i] = new_posterior.P[i][P_perms]
+
+            #determining which of the permutations of this sample gives the lowest std deviation across all samples for each planet period
+            _s = np.std(new_posterior_P_perms, axis=1)
+            best_perm_idx = np.argmin(_s.sum(axis=1))
+            best_perm = P_perms[best_perm_idx]
+
+            if best_perm_idx != 0: #if the best permutation is not the original ordering, then we reorder the parameters accordingly
+                new_posterior.P[i] = new_posterior.P[i][best_perm]
+                new_posterior.K[i] = new_posterior.K[i][best_perm]
+                new_posterior.e[i] = new_posterior.e[i][best_perm]
+                new_posterior.w[i] = new_posterior.w[i][best_perm]
+                new_posterior.φ[i] = new_posterior.φ[i][best_perm]
+                s = _s[best_perm_idx]
                 if res.model is MODELS.RVHGPMmodel:
-                    new_posterior.i[i, ind] = new_posterior.i[i, ind][::-1]
-                    new_posterior.W[i, ind] = new_posterior.W[i, ind][::-1]
-                    new_posterior.Ω_deg[i, ind] = new_posterior.Ω_deg[i, ind][::-1]
+                    new_posterior.i[i] = new_posterior.i[i][best_perm]
+                    new_posterior.W[i] = new_posterior.W[i][best_perm]
+                    new_posterior.Ω_deg[i] = new_posterior.Ω_deg[i][best_perm]
             else:
-                new_posterior.P[i, ind] = new_posterior.P[i, ind][::-1]
-            # input()
+                pass
 
         passes_done += 1
         if passes != -1 and passes_done >= passes:
             keep_going = False
         if passes == -1:
-            if (s.round(2) < s_old.round(2)).any():
+            if (s.sum().round(2) < s_old.sum().round(2)):
                 s_old = s
                 keep_going = True
             else:
