@@ -1321,6 +1321,23 @@ def reorder_P5_and_sort(res, replace=False):
     # the maximum likelihood sample will serve as reference
     p = res.maximum_likelihood_sample()
 
+    #first determining the proper sorting of the ML companions in order of increasing period,
+    #and changing the ML solution and the posteriors to be in this order, before reordering
+    order = np.argsort(p[res.indices['planets.P']])
+
+    p[res.indices['planets.P']] = p[res.indices['planets.P']][order]    
+    p[res.indices['planets.K']] = p[res.indices['planets.K']][order]
+
+    new_posterior.P = new_posterior.P[:, order]
+    new_posterior.K = new_posterior.K[:, order]
+    for field in fields:
+        try:
+            arr = getattr(new_posterior, field)
+            arr[:, :] = arr[:, order] #adding a reference to a specific part of the arr array (even though it refers to the entirety of arr) to avoid creating a new object, but instead 
+                                        #modifying the original arr array in place, which is necessary to ensure that the changes are reflected in new_posterior       
+        except AttributeError:
+            pass
+
     for j in range(res.npmax - 1):
         # all possible permutations of the columns after the jth
         perms = list(map(np.array, permutations(range(j, res.npmax))))
@@ -1344,20 +1361,6 @@ def reorder_P5_and_sort(res, replace=False):
                     arr[i, j:] = arr[i, j:][perm - j]
                 except AttributeError:
                     pass
-
-    #now determining the order of the companions in order of increasing period
-    order = np.argsort(np.median(new_posterior.P, axis=0))
-
-    new_posterior.P = new_posterior.P[:, order]
-    new_posterior.K = new_posterior.K[:, order]
-    for field in fields:
-        try:
-            arr = getattr(new_posterior, field)
-            arr[:, :] = arr[:, order] #adding a reference to a specific part of the arr array (even though it refers to the entirety of arr) to avoid creating a new object, but instead 
-                                        #modifying the original arr array in place, which is necessary to ensure that the changes are reflected in new_posterior       
-        except AttributeError:
-            pass
-   
 
     if replace:
         res.posteriors = new_posterior
