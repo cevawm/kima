@@ -1319,11 +1319,15 @@ def reorder_P5_and_sort(res, replace=False):
     fields = ('e', 'w', 'φ',
               'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
     # the maximum likelihood sample will serve as reference
-    p = res.maximum_likelihood_sample()
+    # p = res.maximum_likelihood_sample()
+    #trying out the maximum likelihood sample but with a bayesian 
+    #threshold applied first to determine which companions are the "real"
+    p = res.maximum_likelihood_sample(Np=np_bayes_factor_threshold(res))
 
     #first determining the proper sorting of the ML companions in order of increasing period,
     #and changing the ML solution and the posteriors to be in this order, before reordering
-    order = np.argsort(p[res.indices['planets.P']])
+    order = np.argsort(p[res.indices['planets.P']][np.flatnonzero(p[res.indices['planets.P']])])
+    
 
     p[res.indices['planets.P']] = p[res.indices['planets.P']][order]    
     p[res.indices['planets.K']] = p[res.indices['planets.K']][order]
