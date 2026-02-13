@@ -1321,17 +1321,21 @@ def reorder_P5_and_sort(res, replace=False):
     # the maximum likelihood sample will serve as reference
     # p = res.maximum_likelihood_sample()
     #trying out the maximum likelihood sample but with a bayesian 
-    #threshold applied first to determine which companions are the "real"
+    #threshold applied first to determine which companions are "real"
     p = res.maximum_likelihood_sample(Np=np_bayes_factor_threshold(res))
 
     #first determining the proper sorting of the ML companions in order of increasing period,
     #and changing the ML solution and the posteriors to be in this order, before reordering
-    order = np.argsort(p[res.indices['planets.P']][np.flatnonzero(p[res.indices['planets.P']])])
     
-
+    #getting the order of the real companions
+    order_real = np.argsort(p[res.indices['planets.P']][np.flatnonzero(p[res.indices['planets.P']])]) 
+    #appending the order of the "non-real" companions (those with P=0) to the order of the real companions, so that the non-real companions are still at the end of the list after sorting
+    order = np.append(order_real, np.asarray(range(len(order_real), len(p[res.indices['planets.P']])))).astype(int) 
+    
     p[res.indices['planets.P']] = p[res.indices['planets.P']][order]    
     p[res.indices['planets.K']] = p[res.indices['planets.K']][order]
 
+    #reordering the posteriors to be in the same order as the ML solution, so that the subsequent reordering of the posteriors based on distance to the ML solution is done correctly
     new_posterior.P = new_posterior.P[:, order]
     new_posterior.K = new_posterior.K[:, order]
     for field in fields:
