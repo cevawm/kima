@@ -1476,7 +1476,7 @@ class KimaResults:
         return parameter_priors
 
     @classmethod
-    def load(cls, filename: str = None, diagnostic: bool = False, **kwargs):
+    def load(cls, filename: str = None, zipped_folder: bool = True, **kwargs):
         """
         Load a KimaResults object from the current directory, a pickle file, or
         a zip file.
@@ -1485,8 +1485,9 @@ class KimaResults:
             filename (str, optional):
                 If given, load the model from this file. Can be a zip or pickle
                 file. Defaults to None.
-            diagnostic (bool, optional):
-                Whether to plot the DNest4 diagnotics. Defaults to False.
+            zipped_folder (bool, optional):
+                Whether `filename` is a zipped results folder (instead of a
+                zipped pickle file). Defaults to True.
             **kwargs: Extra keyword arguments passed to `showresults`
 
         Returns:
@@ -1494,20 +1495,24 @@ class KimaResults:
         """
         if filename is None:
             from .showresults import showresults
+
             return showresults(force_return=True, **kwargs)
 
         try:
-            if filename.endswith('.zip'):
+            if filename.endswith('.zip') and zipped_folder:
                 zf = zipfile.ZipFile(filename, 'r')
                 names = zf.namelist()
-                needs = ('sample.txt', 'levels.txt', 'sample_info.txt',
-                         'kima_model_setup.txt')
+                needs = (
+                    'sample.txt',
+                    'levels.txt',
+                    'sample_info.txt',
+                    'kima_model_setup.txt',
+                )
                 wants = ('posterior_sample.txt', 'posterior_sample_info.txt')
 
                 for need in needs:
                     if need not in names:
-                        raise ValueError('%s does not contain a "%s" file' %
-                                         (filename, need))
+                        raise ValueError('%s does not contain a "%s" file' % (filename, need))
 
                 with tempfile.TemporaryDirectory() as dirpath:
                     for need in needs:
@@ -1558,6 +1563,7 @@ class KimaResults:
 
             elif filename.endswith('.pkl'):
                 import pickle
+
                 try:
                     with open(filename, 'rb') as f:
                         res = pickle.load(f)
@@ -1569,11 +1575,10 @@ class KimaResults:
                 try:
                     import compress_pickle as pickle
                 except (ImportError, ModuleNotFoundError):
-                    print('reading compressed file requires the `compress-pickle` package')
-                    return
-                
-                res = pickle.load(filename)
+                    msg = "reading compressed file requires the `compress-pickle` package"
+                    raise ModuleNotFoundError(msg)
 
+                res = pickle.load(filename)
 
         except Exception:
             # print('Unable to load data from ', filename, ':', e)
@@ -1690,14 +1695,15 @@ class KimaResults:
                 elif isinstance(compress, str):
                     available = list(filter(None, pickle.compressers.registry.get_known_compressions()))
                     if compress not in available:
-                        print('available compression methods: ', available)
-                        return
+                        raise ValueError(f'available compression methods: {available}')
+
                     dump_kwargs['compression'] = compress
                     ending = ending + COMPRESSED_FILE_EXT[compress]
 
             except (ImportError, ModuleNotFoundError):
-                print('compression requires the `compress-pickle` package')
-                return
+                msg = 'Compression requires the `compress-pickle` package. '
+                msg += 'Install with pip install "compress-pickle[lz4]"'
+                raise ModuleNotFoundError(msg)
 
         if filename is None:
             filename = self.get_model_id(add_timestamp=True)
@@ -2221,18 +2227,17 @@ class KimaResults:
         return map_sample
     
     def maximum_likelihood(self, Np=None, from_posterior=False):
-        """ Get the maximum log-likelihood value
-        
+        """Get the maximum log-likelihood value
+
         Args:
             Np (int, optional):
                 If given, select only samples with that number of planets.
-            from_posterior (bool, optional): 
+            from_posterior (bool, optional):
                 If True, return the highest likelihood value *from samples that
                 represent the posterior*.
         """
         if self.sample_info is None and not self._lnlike_available:
-            print('log-likelihoods are not available! '
-                  'max_log_likelihood() doing nothing...')
+            print("log-likelihoods are not available! max_log_likelihood() doing nothing...")
             return
 
         if from_posterior:
@@ -2245,10 +2250,10 @@ class KimaResults:
     def maximum_likelihood_sample(self, Np=None, printit=True, mask=None,
                                   from_posterior=False, optimize=False):
         """
-        Get the maximum likelihood sample. 
-        
+        """Get the maximum likelihood sample.
+
         By default, this is the highest likelihood sample found by DNest4.
-        
+
         Note:
             If `from_posterior=True`, the returned sample may change, due to
             random choices, between different calls to `load_results`.
@@ -2258,9 +2263,9 @@ class KimaResults:
                 If given, select only samples with that number of planets.
             printit (bool, optional):
                 Whether to print the sample
-            from_posterior (bool, optional): 
+            from_posterior (bool, optional):
                 If True, return the highest likelihood sample *from those that
-                represent the posterior*. 
+                represent the posterior*.
             optimize (bool, optional):
                 If True, optimize the likelihood, starting from the maximum
                 likelihood sample.
