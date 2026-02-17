@@ -2271,8 +2271,7 @@ class KimaResults:
                 likelihood sample.
         """
         if self.sample_info is None and not self._lnlike_available:
-            print('log-likelihoods are not available! '
-                  'maximum_likelihood_sample() doing nothing...')
+            print("log-likelihoods are not available! maximum_likelihood_sample() doing nothing...")
             return
 
         if from_posterior:
@@ -4118,14 +4117,14 @@ class KimaResults:
                 prior_short = prior_short.replace('Uniform', 'U')
                 prior_short = prior_short.replace('Kumaraswamy', 'Kuma')
                 prior_short = prior_short.replace('Gaussian', 'G')
-                print('    %-15s: %-20s Ͱ %-24s %60s' % (p, med_sigma, prior_short, range_dist))
+                print("    %-15s: %-20s Ͱ %-24s %60s" % (p, med_sigma, prior_short, range_dist))
             else:
-                print('    %-15s: %-20s Ͱ %60s' % (p, med_sigma, range_dist))
+                print("    %-15s: %-20s Ͱ %60s" % (p, med_sigma, range_dist))
 
         ########
 
-        print(f'logL max: {self.sample_info[:,1].max():.2f}')
-        print(f'logZ: {self.evidence:.2f}', end='\n\n')
+        print(f"logL max: {self.sample_info[:, 1].max():.2f}")
+        print(f"logZ: {self.evidence:.2f}", end="\n\n")
         print_header()
 
         # if self.posteriors.jitter.ndim == 1:
@@ -4227,11 +4226,11 @@ class KimaResults:
                 Np_mask = self.Np > i
                 if not Np_mask.any():
                     continue
-                print_line(f'{i+1}: P', self.posteriors.P[Np_mask, i], self.priors['Pprior'], show_prior)
-                print_line(f'{i+1}: K', self.posteriors.K[Np_mask, i], self.priors['Kprior'], show_prior)
-                print_line(f'{i+1}: M0', self.posteriors.φ[Np_mask, i], self.priors['phiprior'], show_prior)
-                print_line(f'{i+1}: e', self.posteriors.e[Np_mask, i], self.priors['eprior'], show_prior)
-                print_line(f'{i+1}: w', self.posteriors.w[Np_mask, i], self.priors['wprior'], show_prior)
+                print_line(f'{i + 1}: P', self.posteriors.P[Np_mask, i], self.priors['Pprior'], show_prior)
+                print_line(f'{i + 1}: K', self.posteriors.K[Np_mask, i], self.priors['Kprior'], show_prior)
+                print_line(f'{i + 1}: M0', self.posteriors.φ[Np_mask, i], self.priors['phiprior'], show_prior)
+                print_line(f'{i + 1}: e', self.posteriors.e[Np_mask, i], self.priors['eprior'], show_prior)
+                print_line(f'{i + 1}: w', self.posteriors.w[Np_mask, i], self.priors['wprior'], show_prior)
                 print('    --')
         
         if self.has_gp:
