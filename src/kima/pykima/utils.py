@@ -168,7 +168,7 @@ def compress_outputs(directory=None, posterior=True, delete_originals=False,
         directory = os.getcwd()
 
     sample_files = (
-        'sample.txt', 'sample_info.txt', 'levels.txt', 'kima_model_setup.txt',
+        'sample.txt', 'sample_info.txt', 'levels.txt', #'kima_model_setup.txt',
         'sampler_state.txt'
     )
     posterior_files = (
