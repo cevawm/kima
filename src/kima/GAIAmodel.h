@@ -30,11 +30,6 @@ class KIMA_API GAIAmodel
         bool fix {true};
         /// Maximum number of planets (by default 1)
         int npmax {1};
-    
-        /// include (better) known extra Keplerian curve(s)? (KO mode!)
-        ///bool known_object {false};
-        /// how many known objects
-        ///int n_known_object {0};
         
         ///Whether to use thiele_innes parametrisation
         bool thiele_innes {false};
@@ -59,9 +54,19 @@ class KIMA_API GAIAmodel
         double mua;
         double mud;
         double plx;
+
+        // Parameters for accelerations if using
+        double accela;
+        double acceld;
+        double jerka;
+        double jerkd;
         
         double nu;
         double jitter;
+
+        // Parameters of the scan-angle bias modelling if set
+        std::vector<double> Ak;
+        std::vector<double> thetak;
 
         // Parameters for the known object, if set. Use geometric parameters rather than thiele_innes
         // double KO_P, KO_K, KO_e, KO_phi, KO_w;
@@ -99,6 +104,31 @@ class KIMA_API GAIAmodel
         distribution Jprior;
         /// prior for student-t degree of freedom
         distribution nu_prior;
+
+        ///Whether to include a model of the along-scan bias from a close binary (see Holl et al. 2023)
+        bool al_scan_bias {false};
+        bool get_al_scan_bias() { return al_scan_bias; }
+        ///number of components of the al_scan bias model up to 3?
+        size_t al_scan_bias_components {0};
+        size_t get_al_scan_bias_components() { return al_scan_bias_components; }
+        /// set the number of components
+        void set_al_scan_bias(size_t al_scan_bias_components);
+
+
+        std::vector<distribution> Ak_prior;
+        std::vector<distribution> thetak_prior;
+
+        ///Whether to use an acceleration solution (i.e. 7-parameter or 9-parameter rather than the default 5-parameter solution)
+        bool acceleration {false};
+        bool jerk {false};
+        size_t n_background_params {5};
+        size_t get_n_background_params() { return n_background_params; }
+        void set_background_solution(size_t n_background_params);
+        
+        distribution accela_prior;
+        distribution acceld_prior;
+        distribution jerka_prior;
+        distribution jerkd_prior;
         
         //priors for astrometric solution
         distribution da_prior;

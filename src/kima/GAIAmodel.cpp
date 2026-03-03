@@ -9,6 +9,9 @@ using namespace brandt;
 #define TIMING false
 
 const double halflog2pi = 0.5*log(2.*M_PI);
+const double daytoyear = 1/365.25;
+const double daytoyear2 = 1/(365.25*365.25);
+const double daytoyear3 = 1/(365.25*365.25*365.25);
 
 
 void GAIAmodel::initialize_from_data(GAIAdata& data)
@@ -21,6 +24,38 @@ void GAIAmodel::initialize_from_data(GAIAdata& data)
     auto conditional = planets.get_conditional_prior();
     
     conditional->set_default_priors(data);
+}
+
+void GAIAmodel::set_background_solution(size_t n)
+{
+    n_background_params = n;
+    if (n==5){
+        acceleration = false;
+        jerk = false;
+    }
+    else if (n==7){
+        acceleration = true;
+        jerk = false;
+    }
+    else if (n==9){
+        acceleration = true;
+        jerk = true;
+    }
+    else {
+        throw std::logic_error("When setting a background solution please choose one of 5 (standard), 7 (+  (+jerk) for the number of parameters.");
+    }
+}
+
+void GAIAmodel::set_al_scan_bias(size_t n)
+{
+    al_scan_bias = true;
+    al_scan_bias_components = n;
+
+    Ak.resize(n);
+    thetak.resize(n);
+
+    Ak_prior.resize(n);
+    thetak_prior.resize(n);
 }
 
 void GAIAmodel::set_known_object(size_t n)
@@ -57,17 +92,40 @@ void GAIAmodel::setPriors()  // BUG: should be done by only one thread!
      
     if (!Jprior)
         Jprior = make_prior<ModifiedLogUniform>(0.01,10.);
+
+    if (al_scan_bias)
+    {
+        for (int i = 0; i < al_scan_bias_components; i++)
+        {
+            if (!Ak_prior[i])
+                Ak_prior[i] = make_prior<ModifiedLogUniform>(0.5,10.);
+            if (!thetak_prior[i])
+                thetak_prior[i] = make_prior<Uniform>(0,2.*M_PI/(i*2 + 3));
+        }
+    }
     
     if (!da_prior)
         da_prior = make_prior<Gaussian>(0.0,pow(10,0));
     if (!dd_prior)
         dd_prior = make_prior<Gaussian>(0.0,pow(10,0));
     if (!mua_prior)
-        mua_prior = make_prior<Gaussian>(0.0,pow(10,1));
+        mua_prior = make_prior<Gaussian>(0.0,pow(10,2));
     if (!mud_prior)
-        mud_prior = make_prior<Gaussian>(0.0,pow(10,1));
+        mud_prior = make_prior<Gaussian>(0.0,pow(10,2));
     if (!plx_prior)
         plx_prior = make_prior<LogUniform>(1.,100.);
+    if (acceleration) {
+        if (!accela_prior)
+            accela_prior = make_prior<Gaussian>(0.0,0.5);
+        if (!acceld_prior)
+            acceld_prior = make_prior<Gaussian>(0.0,0.5);
+        if (jerk) {
+            if (!jerka_prior)
+                jerka_prior = make_prior<Gaussian>(0.0,0.1);
+            if (!jerka_prior)
+                jerka_prior = make_prior<Gaussian>(0.0,0.1);
+        }
+    }
         
     if (known_object) { // KO mode!
         // if (n_known_object == 0) cout << "Warning: `known_object` is true, but `n_known_object` is set to 0";
@@ -93,12 +151,29 @@ void GAIAmodel::from_prior(RNG& rng)
     planets.consolidate_diff();
     
     jitter = Jprior->generate(rng);
+
+    if (al_scan_bias)
+    {
+        for (int i=0; i<al_scan_bias_components; i++){
+            Ak[i] = Ak_prior[i]->generate(rng);
+            thetak[i] = thetak_prior[i]->generate(rng);
+        }
+    }
     
     da = da_prior->generate(rng);
     dd = dd_prior->generate(rng);
     mua = mua_prior->generate(rng);
     mud = mud_prior->generate(rng);
     plx = plx_prior->generate(rng);
+
+    if (acceleration){
+        accela = accela_prior->generate(rng);
+        acceld = acceld_prior->generate(rng);
+        if (jerk){
+            jerka = jerka_prior->generate(rng);
+            jerkd = jerkd_prior->generate(rng);
+        }
+    }
 
     
     if (known_object) { // KO mode!
@@ -154,11 +229,25 @@ void GAIAmodel::calculate_mu()
         
         for(size_t i=0; i<mu.size(); i++)
         {
-            mu[i] += (da + mua * (data.t[i]-data.M0_epoch)) * sin(data.psi[i]) + (dd + mud * (data.t[i]-data.M0_epoch)) * cos(data.psi[i]) + plx*data.pf[i];
+            mu[i] += (da + mua * daytoyear * (data.t[i]-data.M0_epoch)) * sin(data.psi[i]) + (dd + mud * daytoyear * (data.t[i]-data.M0_epoch)) * cos(data.psi[i]) + plx*data.pf[i];
+            if (acceleration){
+                mu[i] += (accela * daytoyear2 * pow((data.t[i]-data.M0_epoch),2) / 2) * sin(data.psi[i]) + (acceld * daytoyear2 * pow((data.t[i]-data.M0_epoch),2) / 2) * cos(data.psi[i]);
+                if (jerk){
+                    mu[i] += (jerka * daytoyear3 * pow((data.t[i]-data.M0_epoch),3) / 6) * sin(data.psi[i]) + (jerkd * daytoyear3 * pow((data.t[i]-data.M0_epoch),3) / 6) * cos(data.psi[i]);
+                }
+            }
         }
 
         if (known_object) { // KO mode!
             add_known_object();
+        }
+
+        if (al_scan_bias) {
+            for (int j=0; j<al_scan_bias_components; j++){
+                for(size_t i=0; i<mu.size(); i++){
+                    mu[i] += Ak[j] * cos((j*2 + 3)*(data.psi[i] - thetak[j]));
+                }
+            }
         }
     }
     else // just updating (adding) planets
@@ -200,25 +289,6 @@ void GAIAmodel::calculate_mu()
         auto wk = brandt::keplerian_gaia(data.t, data.psi, A, B, F, G, ecc, P, phi, data.M0_epoch);
         for(size_t i=0; i<N; i++)
             mu[i] += wk[i];
-
-//         for(size_t i=0; i<N; i++)
-//         {
-//             ti = data.t[i];
-//             
-//             if(!thiele_innes)
-//             {
-//                 A = a0*(cos(omega) * cos(Omega) - sin(omega) * sin(Omega) * cosi);
-//                 B = a0*(cos(omega) * sin(Omega) - sin(omega) * cos(Omega) * cosi);
-//                 F = -a0*(sin(omega) * cos(Omega) - cos(omega) * sin(Omega) * cosi);
-//                 G = -a0*(sin(omega) * sin(Omega) - cos(omega) * cos(Omega) * cosi);
-//             }
-//             
-//             Tp = data.M0_epoch - (P * phi) / (2. * M_PI);
-//             tie(X,Y) = nijenhuis::ellip_rectang(ti, P, ecc, Tp);
-//             
-//             wk = (B*X + G*Y)*sin(data.psi[i]) + (A*X + F*Y)*cos(data.psi[i]);
-//             mu[i] += wk;
-//         }
     }
 
     #if TIMING
@@ -246,23 +316,6 @@ void GAIAmodel::remove_known_object()
         auto wk = brandt::keplerian_gaia(data.t,data.psi, A, B, F, G, KO_e[j], KO_P[j], KO_phi[j], data.M0_epoch);
         for(size_t i=0; i<N; i++)
             mu[i] -= wk[i];
-
-        // for(size_t i=0; i<data.N(); i++)
-        // {
-        //     ti = data.t[i];
-            
-        //     A = KO_a0[j]*(cos(KO_omega[j]) * cos(KO_Omega[j]) - sin(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        //     B = KO_a0[j]*(cos(KO_omega[j]) * sin(KO_Omega[j]) - sin(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-        //     F = -KO_a0[j]*(sin(KO_omega[j]) * cos(KO_Omega[j]) - cos(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        //     G = -KO_a0[j]*(sin(KO_omega[j]) * sin(KO_Omega[j]) - cos(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-            
-        //     Tp = data.M0_epoch-(KO_P[j]*KO_phi[j])/(2.*M_PI);
-            
-        //     tie(X,Y) = nijenhuis::ellip_rectang(ti, KO_P[j], KO_e[j], Tp);
-            
-        //     wk =(B*X + G*Y)*sin(data.psi[i]) + (A*X + F*Y)*cos(data.psi[i]);
-        //     mu[i] -= wk;
-        // }
     }
 }
 
@@ -282,23 +335,6 @@ void GAIAmodel::add_known_object()
         auto wk = brandt::keplerian_gaia(data.t,data.psi, A, B, F, G, KO_e[j], KO_P[j], KO_phi[j], data.M0_epoch);
         for(size_t i=0; i<N; i++)
             mu[i] += wk[i];
-        
-        // for(size_t i=0; i<data.N(); i++)
-        // {
-        //     ti = data.t[i];
-            
-        //     A = KO_a0[j]*(cos(KO_omega[j]) * cos(KO_Omega[j]) - sin(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        //     B = KO_a0[j]*(cos(KO_omega[j]) * sin(KO_Omega[j]) - sin(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-        //     F = -KO_a0[j]*(sin(KO_omega[j]) * cos(KO_Omega[j]) - cos(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        //     G = -KO_a0[j]*(sin(KO_omega[j]) * sin(KO_Omega[j]) - cos(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-            
-        //     Tp = data.M0_epoch-(KO_P[j]*KO_phi[j])/(2.*M_PI);
-            
-        //     tie(X,Y) = nijenhuis::ellip_rectang(ti,  KO_P[j], KO_e[j], Tp);
-            
-        //     wk =(B*X + G*Y)*sin(data.psi[i]) + (A*X + F*Y)*cos(data.psi[i]);
-        //     mu[i] += wk;
-        // }
     }
 }
 
@@ -310,6 +346,13 @@ double GAIAmodel::perturb(RNG& rng)
     
 
     double logH = 0.;
+    double prob_add = 0;
+    if (known_object){
+        prob_add += 0.2;
+    }
+    if (al_scan_bias){
+        prob_add +=0.2;
+    }
 
     if(rng.rand() <= 0.5 && npmax > 0) // perturb planet parameters
     {
@@ -317,7 +360,7 @@ double GAIAmodel::perturb(RNG& rng)
         planets.consolidate_diff();
         calculate_mu();
     }
-    else if(rng.rand() <= 0.2) // perturb jitter(s) + known_object
+    else if(rng.rand() <= 0.2 + prob_add) // perturb jitter(s) + known_object
     {
         
         Jprior->perturb(jitter, rng);
@@ -342,14 +385,33 @@ double GAIAmodel::perturb(RNG& rng)
 
             add_known_object();
         }
+
+        if (al_scan_bias) {
+            for (int j=0; j<al_scan_bias_components; j++){
+                for(size_t i=0; i<mu.size(); i++){
+                    mu[i] -= Ak[j] * cos((j*2 + 3)*(data.psi[i] - thetak[j]));
+                }
+                Ak_prior[j]->perturb(Ak[j], rng);
+                thetak_prior[j]->perturb(thetak[j], rng);
+                for(size_t i=0; i<mu.size(); i++){
+                    mu[i] += Ak[j] * cos((j*2 + 3)*(data.psi[i] - thetak[j]));
+                }
+            }
+        }
         
     }
     else //perturb background solution
     {
-        //subtract ephemeris
+        //subtract 5-parameter solution
         for(size_t i=0; i<mu.size(); i++)
         {
-            mu[i] += -(da + mua * (data.t[i]-data.M0_epoch)) * sin(data.psi[i]) - (dd + mud * (data.t[i]-data.M0_epoch)) * cos(data.psi[i]) - plx*data.pf[i];
+            mu[i] += - (da + mua * daytoyear * (data.t[i]-data.M0_epoch)) * sin(data.psi[i]) - (dd + mud * daytoyear * (data.t[i]-data.M0_epoch)) * cos(data.psi[i]) - plx*data.pf[i];
+            if (acceleration){
+                mu[i] += - (accela * daytoyear2 * pow((data.t[i]-data.M0_epoch),2) / 2) * sin(data.psi[i]) - (acceld * daytoyear2 * pow((data.t[i]-data.M0_epoch),2) / 2) * cos(data.psi[i]);
+                if (jerk){
+                    mu[i] += - (jerka * daytoyear3 * pow((data.t[i]-data.M0_epoch),3) / 6) * sin(data.psi[i]) - (jerkd * daytoyear3 * pow((data.t[i]-data.M0_epoch),3) / 6) * cos(data.psi[i]);
+                }
+            }
         }
         // propose new parameters
         da_prior->perturb(da, rng);
@@ -357,11 +419,25 @@ double GAIAmodel::perturb(RNG& rng)
         mua_prior->perturb(mua, rng);
         mud_prior->perturb(mud, rng);
         plx_prior->perturb(plx, rng);
+        if (acceleration){
+            accela_prior->perturb(accela, rng);
+            acceld_prior->perturb(acceld, rng);
+            if (jerk){
+                jerka_prior->perturb(jerka, rng);
+                jerkd_prior->perturb(jerkd, rng);
+            }
+        }
 
-        //add ephemeris back in
+        //add 5-parameter solution back in
         for(size_t i=0; i<mu.size(); i++)
         {
-            mu[i] += (da + mua * (data.t[i]-data.M0_epoch)) * sin(data.psi[i]) + (dd + mud * (data.t[i]-data.M0_epoch)) * cos(data.psi[i]) + plx*data.pf[i];;
+            mu[i] += (da + mua * daytoyear * (data.t[i]-data.M0_epoch)) * sin(data.psi[i]) + (dd + mud * daytoyear * (data.t[i]-data.M0_epoch)) * cos(data.psi[i]) + plx*data.pf[i];;
+            if (acceleration){
+                mu[i] += (accela * daytoyear2 * pow((data.t[i]-data.M0_epoch),2) / 2) * sin(data.psi[i]) + (acceld * daytoyear2 * pow((data.t[i]-data.M0_epoch),2) / 2) * cos(data.psi[i]);
+                if (jerk){
+                    mu[i] += (jerka * daytoyear3 * pow((data.t[i]-data.M0_epoch),3) / 6) * sin(data.psi[i]) + (jerkd * daytoyear3 * pow((data.t[i]-data.M0_epoch),3) / 6) * cos(data.psi[i]);
+                }
+            }
         }
     }
 
@@ -451,10 +527,23 @@ void GAIAmodel::print(std::ostream& out) const
     out << mua << '\t';
     out << mud << '\t';
     out << plx << '\t';
+
+    if (acceleration){
+        out << accela << '\t';
+        out << acceld << '\t';
+        if (jerk){
+            out << jerka << '\t';
+            out << jerkd << '\t';
+        }
+    }
     
     out.precision(8);
 
     //auto data = get_data();
+    if (al_scan_bias){
+        for (auto A: Ak) out << A << "\t";
+        for (auto theta: thetak) out << theta << "\t";
+    }
 
     if(known_object){ // KO mode!
         for (auto P: KO_P) out << P << "\t";
@@ -489,7 +578,22 @@ string GAIAmodel::description() const
     desc += "mud" + sep;
     desc += "parallax" + sep;
 
+    if (acceleration){
+        desc += "accela" + sep;
+        desc += "acceld" + sep;
+        if (jerk){
+            desc += "jerka" + sep;
+            desc += "jerkd" + sep;
+        }
+    }
+
     //auto data = get_data();
+    if (al_scan_bias){
+        for (int i=0; i<al_scan_bias_components; i++)
+            desc += "A"+std::to_string(i*2 + 3) + sep;
+        for (int i=0; i<al_scan_bias_components; i++)
+            desc += "theta"+std::to_string(i*2 + 3) + sep;
+    }
 
     if(known_object) { // KO mode!
         for(int i=0; i<n_known_object; i++) 
@@ -587,6 +691,15 @@ void GAIAmodel::save_setup() {
     fout << "mud_prior: " << *mud_prior << endl;
     fout << "parallax_prior: " << *plx_prior << endl;
 
+    if (acceleration){
+        fout << "accela_prior: " << *accela_prior << endl;
+        fout << "acceld_prior: " << *acceld_prior << endl;
+        if (jerk){
+            fout << "jerka _prior: " << *jerka_prior << endl;
+            fout << "jerkd _prior: " << *jerkd_prior << endl;
+        }
+    }
+
     if (studentt)
         fout << "nu_prior: " << *nu_prior << endl;
 
@@ -614,6 +727,14 @@ void GAIAmodel::save_setup() {
         }
     }
 
+    if (al_scan_bias){
+        fout << endl << "[priors.al_scan_bias]" << endl;
+        for(int i=0; i<n_known_object; i++){
+            fout << "Ak_prior_" << i << ": " << *Ak_prior[i] << endl;
+            fout << "thetak_prior_" << i << ": " << *thetak_prior[i] << endl;
+        }
+    }
+
     if (known_object) {
         fout << endl << "[priors.known_object]" << endl;
         for(int i=0; i<n_known_object; i++){
@@ -636,7 +757,7 @@ using distribution = std::shared_ptr<DNest4::ContinuousDistribution>;
 auto GAIAMODEL_DOC = R"D(
 Analysis of Gaia epoch astrometry. Implements a sum-of-Keplerians model where the number of Keplerians can be free.
 This model assumes white, uncorrelated noise. Known objects are given priors for geometric elements, free planet search 
-has the choice of geometric or Thiele-Innes elements.
+has the choice of geometric or Thiele-Innes elements. An option to fit for a scan-angle dependent signal is included.
 
 Args:
     fix (bool, default=True):
@@ -689,6 +810,17 @@ NB_MODULE(GAIAmodel, m) {
         .def_rw("DEC", &GAIAmodel_publicist::DEC,
                 "Declination of the target star (degrees)")
 
+        .def("set_al_scan_bias", &GAIAmodel::set_al_scan_bias,
+                "set whether the model includes a model for potential scan-angle dependent signals")
+        .def_prop_ro("al_scan_bias", [](GAIAmodel &m) { return m.get_al_scan_bias(); },
+                     "whether the model includes a model for potential scan-angle dependent signals that could bias towards certain frequencies")
+        .def_prop_ro("n_al_scan_componenets", [](GAIAmodel &m) { return m.get_al_scan_bias_components(); },
+                     "how many components of scan-angle harmonics are included")
+
+        .def("set_background_solution", &GAIAmodel::set_background_solution,
+                "set the number of parameters for the background astrometric solution, either 5 (the default astrometric solution), 7, or 9 (which include acceleration and jerk terms)")
+        .def_prop_ro("n_background_params", [](GAIAmodel &m) { return m.get_n_background_params(); },
+                "how many background astrometric parameters are included the model")
 //         //KO mode
 //         .def_rw("known_object", &GAIAmodel_publicist::known_object,
 //                 "whether to include (better) known extra Keplerian curve(s)")
@@ -711,6 +843,14 @@ NB_MODULE(GAIAmodel, m) {
             [](GAIAmodel &m) { return m.nu_prior; },
             [](GAIAmodel &m, distribution &d) { m.nu_prior = d; },
             "Prior for the degrees of freedom of the Student-t likelihood")
+        .def_prop_rw("Ak_prior",
+            [](GAIAmodel &m) { return m.Ak_prior; },
+            [](GAIAmodel &m, std::vector<distribution>& vd) { m.Ak_prior = vd; },
+            "Prior for the amplitudes of scan-angle dependent signals")
+        .def_prop_rw("thetak_prior",
+            [](GAIAmodel &m) { return m.thetak_prior; },
+            [](GAIAmodel &m, std::vector<distribution>& vd) { m.thetak_prior = vd; },
+            "Prior for the phase of scan-angle dependent signals")
         .def_prop_rw("da_prior",
             [](GAIAmodel &m) { return m.da_prior; },
             [](GAIAmodel &m, distribution &d) { m.da_prior = d; },
@@ -722,15 +862,31 @@ NB_MODULE(GAIAmodel, m) {
         .def_prop_rw("mua_prior",
             [](GAIAmodel &m) { return m.mua_prior; },
             [](GAIAmodel &m, distribution &d) { m.mua_prior = d; },
-            "Prior for the proper-motion in right-ascension")
+            "Prior for the proper-motion in right-ascension (mas/yr)")
         .def_prop_rw("mud_prior",
             [](GAIAmodel &m) { return m.mud_prior; },
             [](GAIAmodel &m, distribution &d) { m.mud_prior = d; },
-            "Prior for the proper-motion in declination")
+            "Prior for the proper-motion in declination (mas/yr)")
         .def_prop_rw("parallax_prior",
             [](GAIAmodel &m) { return m.plx_prior; },
             [](GAIAmodel &m, distribution &d) { m.plx_prior = d; },
             "Prior for the parallax")
+        .def_prop_rw("accela_prior",
+            [](GAIAmodel &m) { return m.accela_prior; },
+            [](GAIAmodel &m, distribution &d) { m.accela_prior = d; },
+            "Prior for the proper-acceleration in right-ascension (mas/yr^2)")
+        .def_prop_rw("acceld_prior",
+            [](GAIAmodel &m) { return m.acceld_prior; },
+            [](GAIAmodel &m, distribution &d) { m.acceld_prior = d; },
+            "Prior for the proper-acceleration in declination (mas/yr^2)")
+        .def_prop_rw("jerka_prior",
+            [](GAIAmodel &m) { return m.jerka_prior; },
+            [](GAIAmodel &m, distribution &d) { m.jerka_prior = d; },
+            "Prior for the proper-jerk in right-ascension (mas/yr^3)")
+        .def_prop_rw("jerkd_prior",
+            [](GAIAmodel &m) { return m.jerkd_prior; },
+            [](GAIAmodel &m, distribution &d) { m.jerkd_prior = d; },
+            "Prior for the proper-jerk in declination (mas/yr^3)")    
 
         // known object priors
         // ? should these setters check if known_object is true?

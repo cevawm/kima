@@ -726,23 +726,43 @@ def get_planet_mass_and_semimajor_axis(P, K, e, star_mass=1.0,
         (M, A) where
             M is the output of `get_planet_mass`
             A is the output of `get_planet_semimajor_axis`
-        star_mass (np.ndarray):
-            Gaussian samples if star_mass is a tuple or list
+        star_mass (float, np.ndarray):
+            Provided value of stellar mass or Gaussian samples if `star_mass` is
+            given as a tuple or list
     """
 
     if verbose:
         print('Using star mass = %s solar mass' % star_mass)
+
+    P = np.atleast_1d(P)
+    K = np.atleast_1d(K)
+    e = np.atleast_1d(e)
+
+    # check shapes
+    if P.shape != K.shape:
+        raise ValueError('P and K must have the same shape')
+    if P.shape != e.shape:
+        raise ValueError('P and e must have the same shape')
+
+    ndim1 = P.ndim == 1
+    if ndim1:
+        P = P[:, np.newaxis]
+        K = K[:, np.newaxis]
+        e = e[:, np.newaxis]
 
     if isinstance(star_mass, tuple) or isinstance(star_mass, list):
         # include (Gaussian) uncertainty on the stellar mass
         star_mass = star_mass_samples(*star_mass, P.shape[0])
         star_mass = np.repeat(star_mass.reshape(-1, 1), P.shape[1], axis=1)
 
-    mass = get_planet_mass(P, K, e, star_mass, full_output)
-    a = get_planet_semimajor_axis(P, K, star_mass, full_output)
-    if isinstance(star_mass, np.ndarray):
-        return mass, a, star_mass
-    return mass, a
+    mass = get_planet_mass(P, K, e, star_mass, full_output=full_output)
+    a = get_planet_semimajor_axis(P, K, star_mass, full_output=full_output)
+
+    if full_output and ndim1:
+        mass = mass[0], mass[1], mass[2].flatten()
+        a = a[0], a[1], a[2].flatten()
+
+    return mass, a, star_mass
 
 
 def get_planet_mass_and_semimajor_axis_accurate(P, K, e, I, star_mass=1.0,
@@ -1786,7 +1806,8 @@ def find_outliers(results, sample, threshold=10, full_output=False):
     elif J.shape[0] > 1:
         # one jitter per instrument
         J = J[(res.data.obs - 1).astype(int)]
-
+    if res.model is MODELS.ETVmodel:
+        J = J/(24*3600)
     nu = sample[res.indices['nu']]
 
     # probabilities within the Gaussian and Student-t likelihoods
@@ -1877,8 +1898,8 @@ def detection_limits(results, star_mass: Union[float, Tuple] = 1.0,
     K = K[inds]
     E = E[inds]
 
-    M, A = get_planet_mass_and_semimajor_axis(P, K, E, star_mass=star_mass,
-                                              full_output=True)
+    M, A, _ = get_planet_mass_and_semimajor_axis(P, K, E, star_mass=star_mass,
+                                                 full_output=True)
     M = M[2]
     A = A[2]
 
@@ -2290,8 +2311,7 @@ def full_model_table(res, sample, instruments=None, star_mass=1.0):
             sm = star_mass[0]
         else:
             sm = star_mass
-        _Mpar, _Apar = get_planet_mass_and_semimajor_axis(
-            _P, _K, _ecc, star_mass=sm)
+        _Mpar, _Apar, _ = get_planet_mass_and_semimajor_axis(_P, _K, _ecc, star_mass=sm)
         _Mpar = _Mpar[1]
 
         _M = get_planet_mass(isamples[:, 0], isamples[:, 1], isamples[:, 3],
