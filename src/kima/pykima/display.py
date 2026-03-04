@@ -5026,7 +5026,7 @@ def interactive_plotter(res):
     fig.canvas.callbacks.connect('pick_event', on_pick)
 
 
-def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, reorder=False, **kwargs):
+def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, **kwargs):
     from .utils import distribution_support
 
     short_instruments = [
@@ -5083,10 +5083,6 @@ def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, 
             kw3 = dict(points=False, cmap='YlGnBu', show_colorbar=False)
         else:
             kw3 = kwargs
-
-        if reorder:
-            from .analysis import reorder_P5
-            reorder_P5(res, replace=True, until_detected=False, sort_maximum_likelihood_by_K=False)
 
         res.plot3(ax1=axs['c'], ax2=axs['d'], **kw3)
 
