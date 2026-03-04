@@ -532,18 +532,19 @@ def plot_PKE(res, mask=None, include_known_object=False, include_transiting_plan
     Khdr_threshold = 30
 
     if points:
-        kw = dict(markersize=2, zorder=2, alpha=0.1, picker=5)
+        rasterized = kwargs.pop('rasterized', True)
+        kw = dict(markersize=2, zorder=2, alpha=0.1, picker=True, pickradius=2)
         kw = {**kw, **kwargs}
 
         # plot known_object first so it always has the same color
         if include_known_object:
-            ax1.semilogx(P_KO, K_KO, '.', markersize=2, zorder=2)
-            ax2.semilogx(P_KO, E_KO, '.', markersize=2, zorder=2)
+            ax1.semilogx(P_KO, K_KO, '.', **kw, rasterized=rasterized)
+            ax2.semilogx(P_KO, E_KO, '.', **kw, rasterized=rasterized)
 
         # plot transiting_planet first so it always has the same color
         if include_transiting_planet:
-            ax1.semilogx(P_TR, K_TR, '.', markersize=2, zorder=2)
-            ax2.semilogx(P_TR, E_TR, '.', markersize=2, zorder=2)
+            ax1.semilogx(P_TR, K_TR, '.', **kw, rasterized=rasterized)
+            ax2.semilogx(P_TR, E_TR, '.', **kw, rasterized=rasterized)
 
         if not colors_np:
             P = P.ravel()
@@ -5025,7 +5026,7 @@ def interactive_plotter(res):
     fig.canvas.callbacks.connect('pick_event', on_pick)
 
 
-def report(res):
+def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, **kwargs):
     from .utils import distribution_support
 
     short_instruments = [
@@ -5081,7 +5082,7 @@ def report(res):
         if hexbin:
             kw3 = dict(points=False, cmap='YlGnBu', show_colorbar=False)
         else:
-            kw3 = dict()
+            kw3 = kwargs
 
         res.plot3(ax1=axs['c'], ax2=axs['d'], **kw3)
 
@@ -5143,7 +5144,19 @@ def report(res):
 
     axs['t'].axis('off')
     y = 0
-    axs['t'].text(0, y, res.star); y -= 1
+    if star_name is not None:
+        axs['t'].text(0, y, f"703 cat name: {star_name}"); y -= 1
+    else:
+        axs['t'].text(0, y, res.star); y -= 1
+
+    if add_IDs is not None:
+        axs['t'].text(0, y, " "); y -= 1
+        for ID in add_IDs:
+            axs['t'].text(0, y, f"{ID}:"); y -= 1
+            axs['t'].text(0, y, f"   {add_IDs[ID]}"); y -= 1
+        axs['t'].text(0, y, " "); y -= 1
+
+
     axs['t'].text(0, y, str(res.model).replace('MODELS.', '')); y -= 1
     axs['t'].text(0, y, f'logZ: {res.evidence:.2f}'); y -= 1
     axs['t'].text(0, y, f'ESS: {res.ESS}'); y -= 1
