@@ -5026,7 +5026,7 @@ def interactive_plotter(res):
     fig.canvas.callbacks.connect('pick_event', on_pick)
 
 
-def report(res, hexbin=False, diagnostic=False, **kwargs):
+def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, reorder=False, **kwargs):
     from .utils import distribution_support
 
     short_instruments = [
@@ -5082,7 +5082,11 @@ def report(res, hexbin=False, diagnostic=False, **kwargs):
         if hexbin:
             kw3 = dict(points=False, cmap='YlGnBu', show_colorbar=False)
         else:
-            kw3 = dict()
+            kw3 = kwargs
+
+        if reorder:
+            from .analysis import reorder_P5
+            reorder_P5(res, replace=True, until_detected=False, sort_maximum_likelihood_by_K=False)
 
         res.plot3(ax1=axs['c'], ax2=axs['d'], **kw3)
 
@@ -5144,7 +5148,19 @@ def report(res, hexbin=False, diagnostic=False, **kwargs):
 
     axs['t'].axis('off')
     y = 0
-    axs['t'].text(0, y, res.star); y -= 1
+    if star_name is not None:
+        axs['t'].text(0, y, f"703 cat name: {star_name}"); y -= 1
+    else:
+        axs['t'].text(0, y, res.star); y -= 1
+
+    if add_IDs is not None:
+        axs['t'].text(0, y, " "); y -= 1
+        for ID in add_IDs:
+            axs['t'].text(0, y, f"{ID}:"); y -= 1
+            axs['t'].text(0, y, f"   {add_IDs[ID]}"); y -= 1
+        axs['t'].text(0, y, " "); y -= 1
+
+
     axs['t'].text(0, y, str(res.model).replace('MODELS.', '')); y -= 1
     axs['t'].text(0, y, f'logZ: {res.evidence:.2f}'); y -= 1
     axs['t'].text(0, y, f'ESS: {res.ESS}'); y -= 1
