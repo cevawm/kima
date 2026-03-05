@@ -5042,7 +5042,7 @@ def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, 
     ]
 
     if diagnostic:
-        layout.append(['d1', 'd2', 'd3', 'd4'])
+        layout.append(['d1', 'd2', 'd3'])
 
     fig, axs = plt.subplot_mosaic(layout,
         # 'aaab\npppt\nccco\nddde', 
@@ -5182,9 +5182,6 @@ def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, 
         plot_diagnostic_2(res.levels, ax=(axs['d2'], axs['d3']))
         axs['d2'].set(title='')
         axs['d3'].set(title='')
-
-        axs['d4'].axis('off')
-
 
     return fig, axs
 
