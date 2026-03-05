@@ -5042,7 +5042,7 @@ def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, 
     ]
 
     if diagnostic:
-        layout.append(['d1', 'd2', 'd3'])
+        layout.append(['d1', 'd1', 'd2', 'd3'])
 
     fig, axs = plt.subplot_mosaic(layout,
         # 'aaab\npppt\nccco\nddde', 
