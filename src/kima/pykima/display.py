@@ -5145,9 +5145,9 @@ def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, 
     axs['t'].axis('off')
     y = 0
     if star_name is not None:
-        axs['t'].text(-0.5, y, f"703 cat name: {star_name}"); y -= 1
+        axs['t'].text(-0.5, y, f"703 cat name: {star_name}", weight='bold'); y -= 1
     else:
-        axs['t'].text(-0.5, y, res.star); y -= 1
+        axs['t'].text(-0.5, y, res.star, weight='bold'); y -= 1
 
     if add_IDs is not None:
         axs['t'].text(-0.5, y, " "); y -= 1
