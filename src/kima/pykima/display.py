@@ -5145,31 +5145,31 @@ def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, 
     axs['t'].axis('off')
     y = 0
     if star_name is not None:
-        axs['t'].text(-1, y, f"703 cat name: {star_name}"); y -= 1
+        axs['t'].text(-0.5, y, f"703 cat name: {star_name}"); y -= 1
     else:
-        axs['t'].text(-1, y, res.star); y -= 1
+        axs['t'].text(-0.5, y, res.star); y -= 1
 
     if add_IDs is not None:
-        axs['t'].text(-1, y, " "); y -= 1
+        axs['t'].text(-0.5, y, " "); y -= 1
         for ID in add_IDs:
-            axs['t'].text(-1, y, f"{ID}:"); y -= 1
-            axs['t'].text(-1, y, f"   {add_IDs[ID]}"); y -= 1
-        axs['t'].text(-1, y, " "); y -= 1
+            axs['t'].text(-0.5, y, f"{ID}:"); y -= 1
+            axs['t'].text(-0.5, y, f"   {add_IDs[ID]}"); y -= 1
+        axs['t'].text(-0.5, y, " "); y -= 1
 
 
-    axs['t'].text(-1, y, str(res.model).replace('MODELS.', '')); y -= 1
-    axs['t'].text(-1, y, f'logZ: {res.evidence:.2f}'); y -= 1
-    axs['t'].text(-1, y, f'ESS: {res.ESS}'); y -= 1
-    axs['t'].text(-1, y, f'fix: {res.fix}, $N_{{p, max}}: {res.npmax}$'); y -= 1
+    axs['t'].text(-0.5, y, str(res.model).replace('MODELS.', '')); y -= 1
+    axs['t'].text(-0.5, y, f'logZ: {res.evidence:.2f}'); y -= 1
+    axs['t'].text(-0.5, y, f'ESS: {res.ESS}'); y -= 1
+    axs['t'].text(-0.5, y, f'fix: {res.fix}, $N_{{p, max}}: {res.npmax}$'); y -= 1
     if res.KO:
-        axs['t'].text(-1, y, 'KO: True'); y -= 1
+        axs['t'].text(-0.5, y, 'KO: True'); y -= 1
     if res.TR:
-        axs['t'].text(-1, y, 'TR: True'); y -= 1
+        axs['t'].text(-0.5, y, 'TR: True'); y -= 1
     if res.trend:
-        axs['t'].text(-1, y, f'trend: True, degree: {res.trend_degree}'); y -= 1
+        axs['t'].text(-0.5, y, f'trend: True, degree: {res.trend_degree}'); y -= 1
     if res.studentt:
-        axs['t'].text(-1, y, 'student-t: True'); y -= 1
-    axs['t'].set(ylim=(y-2, 1))
+        axs['t'].text(-0.5, y, 'student-t: True'); y -= 1
+    axs['t'].set(ylim=(y-3, 1))
 
     if diagnostic:
         from .classic import plot_diagnostic_1, plot_diagnostic_2
