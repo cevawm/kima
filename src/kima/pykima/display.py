@@ -5169,7 +5169,7 @@ def report(res, star_name = None, add_IDs=None, hexbin=False, diagnostic=False, 
         axs['t'].text(-0.5, y, f'trend: True, degree: {res.trend_degree}'); y -= 1
     if res.studentt:
         axs['t'].text(-0.5, y, 'student-t: True'); y -= 1
-    axs['t'].set(ylim=(y-3, 1))
+    axs['t'].set(ylim=(y+2, 1))
 
     if diagnostic:
         from .classic import plot_diagnostic_1, plot_diagnostic_2
