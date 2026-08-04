@@ -23,6 +23,82 @@ mjup2msun = 0.0009545942339693249     # 1 Jupiter mass in solar masses
 mearth2msun = 3.0034893488507934e-06  # 1 Earth mass in solar masses
 
 
+def get_ephemeris():
+    """
+    Get the X,Y,Z positions of the Solar System Barycenter relative to the Earth
+    center by querying the JPL Horizons API [1]. 
+
+    1. https://ssd-api.jpl.nasa.gov/doc/horizons.html
+     
+    Originally from https://github.com/Johannes-Sahlmann/pystrometry
+    https://github.com/Johannes-Sahlmann/pystrometry/blob/88ed56dbecd096a6d193c6bc6ac89c6522c9b564/pystrometry/pystrometry.py#L4772
+    Modified to query only SSB relative to Earth center, use pooch for caching,
+    and return the ephemeris data as a numpy array.
+    """
+    import urllib.parse
+    import pooch
+    params = {
+        'format': 'text',
+        'TABLE_TYPE': 'VECTORS',
+        'CSV_FORMAT': 'YES',
+        'COMMAND': '0',
+        'CENTER': 'g@399',
+        'START_TIME': '1950-01-01',
+        'STOP_TIME': '2024-12-31',
+        'STEP_SIZE': '5d',
+        'SKIP_DAYLT': 'NO',
+        'OUT_UNITS': 'AU-D',
+        'VEC_TABLE': '1',
+        'REF_PLANE': 'FRAME'
+    }
+    params = urllib.parse.urlencode(params, safe="'")
+    url = f"https://ssd.jpl.nasa.gov/api/horizons.api?{params}"
+    known_hash = 'e5bc1458840973041bb97f4ab249876554bf201109cad7930477be6633bda5fe'
+    ephemeris_file = pooch.retrieve(
+        url, known_hash=known_hash, 
+        fname='ephemeris.csv', path=pooch.os_cache('kima')
+    )
+    print(f"Ephemeris data downloaded to {ephemeris_file}")
+
+    with open(ephemeris_file, 'r') as f:
+        # find $$SOE and $$EOE lines
+        start, end = None, None
+        for i, line in enumerate(f):
+            if '$$SOE' in line:
+                start = i
+            elif '$$EOE' in line:
+                end = i
+                break
+    
+    ephemeris = np.genfromtxt(
+        ephemeris_file,
+        skip_header=start + 1,
+        max_rows=end - start - 1,
+        delimiter=",",
+        names=['JDTDB', 'Calendar_Date_TDB', 'X', 'Y', 'Z'],
+    )
+    return ephemeris_file, ephemeris
+
+
+def get_parallax_factors(ra, dec, time):
+    """
+    Get the parallax factors for a target at RA,DEC at given times.
+
+    Originally from https://github.com/Johannes-Sahlmann/pystrometry
+    https://github.com/Johannes-Sahlmann/pystrometry/blob/88ed56dbecd096a6d193c6bc6ac89c6522c9b564/pystrometry/pystrometry.py#L4932
+    """
+    from scipy.interpolate import interp1d
+    ra, dec = np.deg2rad((ra, dec))
+    _, ephemeris = get_ephemeris()
+    kw = dict(kind='linear', copy=True, bounds_error=True, fill_value=np.nan)
+    X = interp1d(ephemeris['JDTDB'], ephemeris['X'], **kw)
+    Y = interp1d(ephemeris['JDTDB'], ephemeris['Y'], **kw)
+    Z = interp1d(ephemeris['JDTDB'], ephemeris['Z'], **kw)
+    pf_ra = -1 * (X(time) * np.sin(ra) - Y(time) * np.cos(ra))
+    pf_dec = -1 * ((X(time) * np.cos(ra) + Y(time) * np.sin(ra)) * np.sin(dec) - Z(time) * np.cos(dec))
+    return pf_ra, pf_dec
+
+
 def sounds(on=True):
     import chime
     chime.theme('material')
@@ -593,6 +669,43 @@ def get_gaussian_priors_individual_offsets(data, use_ptp=True, use_std=False, us
         else:
             raise ValueError('either `use_ptp` or `use_std` should be True')
     return [Gaussian(loc, scale) for loc, scale in loc_scale[::-1]]
+
+def get_gaussian_prior_astrometric_baseline(data, sig_mu=0.1, sig_plx=0.1):
+    """
+    Get informative Gaussian priors for the five parameters of the astrometric
+    baseline model (positions, proper motions, parallax) using the data.
+
+    Args:
+        data (kima.GAIAdata): 
+            The Gaia dataset 
+        sig_mu (float, optional):
+            The standard deviation of the proper motion priors, in mas/yr.
+        sig_plx (float, optional):
+            The standard deviation of the parallax prior, in mas.
+    Returns:
+        priors (list[kima.distributions.Gaussian]):
+            Gaussian priors for the five parameters of the astrometric baseline
+            model
+    
+    Examples:
+        ```python
+        data = kima.GAIAdata(...)
+        model = kima.GAIAmodel(...)
+        priors = get_gaussian_prior_astrometric_baseline(data)
+        model.da_prior, model.dd_prior, model.mua_prior, model.mud_prior, model.parallax_prior = priors
+        ```
+    """
+    from kima.distributions import Gaussian
+    t = (np.array(data.t) - data.M0_epoch) / 365.25
+    X = np.c_[np.sin(data.psi), np.cos(data.psi), t * np.sin(data.psi), t * np.cos(data.psi), data.pf]
+    da, dd, mua, mud, plx = np.linalg.lstsq(X, data.w)[0]
+
+    da_prior = Gaussian(0, 1)
+    dd_prior = Gaussian(0, 1)
+    mua_prior = Gaussian(mua, sig_mu)
+    mud_prior = Gaussian(mud, sig_mu)
+    parallax_prior = Gaussian(plx, sig_plx)
+    return [da_prior, dd_prior, mua_prior, mud_prior, parallax_prior]
 
 
 def get_prior_monotransits(T0_1, T0_2, T0_1_err=0.1, T0_2_err=0.1, lower_limit=1.0):
