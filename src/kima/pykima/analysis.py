@@ -827,22 +827,6 @@ def get_planet_mass_and_semimajor_axis_accurate(P, K, e, I=None, star_mass=1.0,
     if verbose:
         print('Using star mass = %s solar mass' % star_mass)
 
-    P = np.atleast_1d(P)
-    K = np.atleast_1d(K)
-    e = np.atleast_1d(e)
-
-    # check shapes
-    if P.shape != K.shape:
-        raise ValueError('P and K must have the same shape')
-    if P.shape != e.shape:
-        raise ValueError('P and e must have the same shape')
-
-    ndim1 = P.ndim == 1
-    if ndim1:
-        P = P[:, np.newaxis]
-        K = K[:, np.newaxis]
-        e = e[:, np.newaxis]
-
     if isinstance(star_mass, tuple) or isinstance(star_mass, list):
         if isinstance(P, float):
             pass
