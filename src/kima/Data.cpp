@@ -68,6 +68,7 @@ RVData::RVData(const vector<string>& filenames, const string& units, int skip, i
 
 /// @brief Load data from vectors directly
 RVData::RVData(const vector<double> _t, const vector<double> _y, const vector<double> _sig,
+               const vector<vector<double>> indicators,
                const string& units, const string& instrument)
 : t(_t), y(_y), sig(_sig)
 {
@@ -80,10 +81,27 @@ RVData::RVData(const vector<double> _t, const vector<double> _y, const vector<do
     _skip = 0;
     _multi = false;
     _indicator_names = {};
-    number_indicators = 0;
+    number_indicators = static_cast<int>(indicators.size());
     number_instruments = 1;
     _instrument = instrument;
     _instruments = {};
+
+    // empty and resize the indicator vectors
+    actind.clear();
+    actind.resize(number_indicators);
+    normalized_actind.clear();
+    normalized_actind.resize(number_indicators);
+    for (int n = 0; n < number_indicators; n++) {
+        actind[n].clear();
+        normalized_actind[n].clear();
+    }
+
+    // set the indicator vectors
+    for (size_t i = 0; i < number_indicators; i++)
+    {
+        actind[i] = indicators[i];
+        normalized_actind[i] = indicators[i];
+    }
 
     if (units == "kms")
     {
@@ -107,38 +125,55 @@ RVData::RVData(const vector<double> _t, const vector<double> _y, const vector<do
     if (units == "kms" && VERBOSE)
         printf("# Multiplied all RVs by 1000; units are now m/s.\n");
 
+    // normalize the activity indicators
+    normalize_actind();
+
 }
 
 /// @brief Load data from vectors directly, for multiple instruments
 RVData::RVData(const vector<vector<double>> _t, 
                const vector<vector<double>> _y, 
                const vector<vector<double>> _sig,
+               const vector<vector<vector<double>>> indicators,
                const string& units, const vector<string>& instruments)
 {
     t.clear();
     y.clear();
     sig.clear();
-
+    // 
     y2.clear();
     sig2.clear();
-
+    // 
+    obsi.clear();
     medians.clear();
 
     if (_t.size() != _y.size()) 
-    {
-        string msg = "RVData: data arrays must have the same size size(t) != size(y)";
-        throw invalid_argument(msg);
-    }
+        throw invalid_argument("RVData: data arrays must have the same size size(t) != size(y)");
     if (_t.size() != _sig.size()) 
+        throw invalid_argument("RVData: data arrays must have the same size size(t) != size(sig)");
+    if (_t.size() != instruments.size()) 
+        throw invalid_argument("RVData: data and instruments must have the same size size(t) != size(instruments)");
+    
+    for (size_t i = 0; i < indicators.size(); i++)
     {
-        string msg = "RVData: data arrays must have the same size size(t) != size(sig)";
-        throw invalid_argument(msg);
+        if (_t.size() != indicators[i].size()) 
+        {
+            string msg = "RVData: data arrays must have the same size size(t) != size(indicators[" + to_string(i) + "])";
+            throw invalid_argument(msg);
+        }
     }
 
-    if (_t.size() != instruments.size()) 
-    {
-        string msg = "RVData: data and instruments must have the same size size(t) != size(instruments)";
-        throw invalid_argument(msg);
+    // TODO: check the individual sizes of each array in _t, _y, _sig, and indicators
+    
+    // empty and resize the indicator vectors
+    number_indicators = static_cast<int>(indicators.size());
+    actind.clear();
+    actind.resize(number_indicators);
+    normalized_actind.clear();
+    normalized_actind.resize(number_indicators);
+    for (int n = 0; n < number_indicators; n++) {
+        actind[n].clear();
+        normalized_actind[n].clear();
     }
 
     for (size_t i = 0; i < _t.size(); i++)
@@ -150,10 +185,16 @@ RVData::RVData(const vector<vector<double>> _t,
         // store medians
         medians.push_back(median(_y[i]));
 
+        for (size_t j = 0; j < number_indicators; j++)
+        {
+            actind[j].insert(actind[j].end(), indicators[j][i].begin(), indicators[j][i].end());
+            normalized_actind[j].insert(normalized_actind[j].end(), indicators[j][i].begin(), indicators[j][i].end());
+        }
+        
+
         for (size_t n = 0; n < _t[i].size(); n++)
             obsi.push_back(static_cast<int>(i) + 1);
     }
-    actind.clear();
 
     _datafile = "";
     _datafiles = {};
@@ -161,7 +202,6 @@ RVData::RVData(const vector<vector<double>> _t,
     _skip = 0;
     _multi = _t.size() > 1;
     _indicator_names = {};
-    number_indicators = 0;
     number_instruments = static_cast<int>(_t.size());
     _instrument = _t.size() == 1 ? instruments[0] : "";
     _instruments = instruments;
@@ -175,11 +215,6 @@ RVData::RVData(const vector<vector<double>> _t,
         }
     }
 
-    // epoch for the mean anomaly, by default the mid time
-    M0_epoch = get_t_middle();
-    // epoch for the trend, by default the mid time
-    trend_epoch = get_t_middle();
-
     // How many points did we read?
     if (VERBOSE)
         printf("# Loaded %zu data points from arrays\n", t.size());
@@ -191,8 +226,9 @@ RVData::RVData(const vector<vector<double>> _t,
     // We need to sort t because it comes from different instruments
     if (number_instruments > 1) {
         size_t N = t.size();
-        vector<double> tt(N), yy(N);
-        vector<double> sigsig(N);
+        vector<double> tt(N), yy(N), sigsig(N);
+        vector<vector<double>> aiai(number_indicators, vector<double>(N));
+        vector<vector<double>> nainai(number_indicators, vector<double>(N));
         vector<int> order(N), obsiobsi(N);
 
         // order = argsort(t)
@@ -206,6 +242,11 @@ RVData::RVData(const vector<vector<double>> _t,
             yy[i] = y[order[i]];
             sigsig[i] = sig[order[i]];
             obsiobsi[i] = obsi[order[i]];
+            for (size_t j = 0; j < number_indicators; j++)
+            {
+                aiai[j][i] = actind[j][order[i]];
+                nainai[j][i] = normalized_actind[j][order[i]];
+            }
         }
 
         for (size_t i = 0; i < N; i++) {
@@ -213,8 +254,21 @@ RVData::RVData(const vector<vector<double>> _t,
             y[i] = yy[i];
             sig[i] = sigsig[i];
             obsi[i] = obsiobsi[i];
+            for (size_t j = 0; j < number_indicators; j++)
+            {
+                actind[j][i] = aiai[j][i];
+                normalized_actind[j][i] = nainai[j][i];
+            }
         }
     }
+
+    // epoch for the mean anomaly, by default the mid time
+    M0_epoch = get_t_middle();
+    // epoch for the trend, by default the mid time
+    trend_epoch = get_t_middle();
+
+    // normalize the activity indicators
+    normalize_actind();
 
 }
 
@@ -825,6 +879,28 @@ int RVData::get_trend_magnitude(int degree, int i) const
     }
 }
 
+double RVData::get_actind_min(size_t i) const
+{
+    auto NaNless = []( const auto &a, const auto &b )
+    {
+        if (std::isnan(b)) return true;  // NaN is greater than *any* non-NaN value
+        if (std::isnan(a)) return false; // *any* non-NaN value is less than NaN
+        return (a < b);
+    };
+    return *min_element(actind.at(i).begin(), actind.at(i).end(), NaNless);
+}
+
+double RVData::get_actind_max(size_t i) const
+{
+    auto NaNless = []( const auto &a, const auto &b )
+    {
+        if (std::isnan(b)) return false; // NaN is less than *any* non-NaN value
+        if (std::isnan(a)) return true;  // *any* non-NaN value is greater than NaN
+        return (a < b);
+    };
+    return *max_element(actind.at(i).begin(), actind.at(i).end(), NaNless);
+}
+
 double RVData::get_actind_mean(size_t i) const
 {
     auto ind = actind[i];
@@ -838,11 +914,20 @@ double RVData::get_actind_mean(size_t i) const
 
 double RVData::get_actind_var(size_t i) const
 {
-    double sum = accumulate(begin(actind[i]), end(actind[i]), 0.0);
-    double mean = sum / actind[i].size();
-    double accum = 0.0;
-    for_each(begin(actind[i]), end(actind[i]), [&](const double d) { accum += (d - mean) * (d - mean); });
-    return accum / (actind[i].size() - 1);
+    auto ind = actind[i];
+
+    size_t n = std::count_if(begin(ind), end(ind), [](double d) { return !std::isnan(d); });
+
+    double sum = std::accumulate(begin(ind), end(ind), 0.0,
+                                 [](double acc, double other) { return std::isnan(other) ? acc : acc + other; });
+    double mean = sum / n;
+
+    double accum = std::accumulate(begin(ind), end(ind), 0.0,
+                                   [mean](double acc, double other) {
+                                     return std::isnan(other) ? acc : acc + (other - mean) * (other - mean);
+                                   });
+
+    return accum / (n - 1);
 }
 
 // normalize activity indicators from 0 to 1
@@ -1289,7 +1374,98 @@ ETVData::ETVData() {};
 
 // the types of objects in the RVData state (for pickling)
 using _state_type = std::tuple<std::string, std::vector<std::string>, std::string, int, std::vector<std::string>, bool>;
+auto RVData_DOC1 = R"D(
+Load RV data from a list of files.
 
+Args:
+    filenames (list):
+        List of filenames to load
+    units (str):
+        Units of the data ('ms' or 'kms')
+    skip (int):
+        Number of lines to skip at the top of the file
+    max_rows (int):
+        Maximum number of rows to read
+    delimiter (str):
+        Delimiter between columns
+    indicators (list):
+        List of names for the indicator columns (should be present in all files)
+    double_lined (bool):
+        Whether the data is for a double-lined binary
+)D";
+
+auto RVData_DOC2 = R"D(
+Load RV data from a file.
+
+Args:
+    filename (str):
+        Name of the file to read
+    units (str):
+        Units of the data ('ms' or 'kms')
+    skip (int):
+        Number of lines to skip at the top of the file
+    max_rows (int):
+        Maximum number of rows to read
+    delimiter (str):
+        Delimiter between columns
+    indicators (list):
+        List of names for the indicator columns
+    double_lined (bool):
+        Whether the data is for a double-lined binary
+)D";
+
+
+auto RVData_DOC3 = R"D(
+Load RV data from arrays for a single instrument.
+
+Args:
+    t (list, array):
+        List of observation times
+    y (list, array):
+        List of RV values
+    sig (list, array):
+        List of RV uncertainties
+    indicators (list[list]):
+        Lists of indicator values
+    units (str):
+        Units of the radial velocity data ('ms' or 'kms')
+    instrument (str):
+        Name of the instrument
+)D";
+
+auto RVData_DOC4 = R"D(
+Load RV data from arrays for multiple instruments.
+
+Args:
+    t (list[list], array[array]):
+        Lists of observation times
+    y (list[list], array[array]):
+        Lists of RV values
+    sig (list[list], array[array]):
+        Lists of RV uncertainties
+    indicators (list[list]):
+        Lists of indicator values (3D array)
+    units (str):
+        Units of the radial velocity data ('ms' or 'kms')
+    instrument (str):
+        Name of the instrument
+)D";
+
+auto GAIAdata_DOC = R"D(
+Load astrometric data from a file
+
+Args:
+    filename (str):
+        Name of the file to read
+    units (str):
+        Units of the data ('ms' or 'kms')
+    skip (int):
+        Number of lines to skip at the top of the file
+    max_rows (int):
+        Maximum number of rows to read
+    delimiter (str):
+        Delimiter between columns
+)D";
 
 NB_MODULE(Data, m) {
     // 
@@ -1308,19 +1484,19 @@ NB_MODULE(Data, m) {
         // constructors
         .def(nb::init<const vector<string>&, const string&, int, int, const string&, const vector<string>&, bool>(),
              "filenames"_a, "units"_a="ms", "skip"_a=0, "max_rows"_a=0, "delimiter"_a=" \t,", "indicators"_a=vector<string>(), "double_lined"_a=false,
-             "Load RV data from a list of files")
+             RVData_DOC1)
         //
         .def(nb::init<const string&, const string&, int, int, bool, const string&, const vector<string>&, bool>(),
              "filename"_a,  "units"_a="ms", "skip"_a=0, "max_rows"_a=0, "multi"_a=false, "delimiter"_a=" \t,", "indicators"_a=vector<string>(), "double_lined"_a=false,
-             "Load RV data from a file")
+             RVData_DOC2)
         //
-        .def(nb::init<const vector<double>, const vector<double>, const vector<double>, const string&,  const string&>(),
-             "t"_a, "y"_a, "sig"_a, "units"_a="ms", "instrument"_a="",
-             "Load RV data from arrays")
+        .def(nb::init<const vector<double>, const vector<double>, const vector<double>, const vector<vector<double>>, const string&,  const string&>(),
+             "t"_a, "y"_a, "sig"_a, "indicators"_a=vector<vector<double>>(), "units"_a="ms", "instrument"_a="",
+             RVData_DOC3)
         //
-        .def(nb::init<const vector<vector<double>>, const vector<vector<double>>, const vector<vector<double>>, const string&,  const vector<string>&>(),
-             "t"_a, "y"_a, "sig"_a, "units"_a="ms", "instruments"_a=vector<string>(),
-             "Load RV data from arrays, for multiple instruments")
+        .def(nb::init<const vector<vector<double>>, const vector<vector<double>>, const vector<vector<double>>, const vector<vector<vector<double>>>, const string&,  const vector<string>&>(),
+             "t"_a, "y"_a, "sig"_a, "indicators"_a=vector<vector<vector<double>>>(), "units"_a="ms", "instruments"_a=vector<string>(),
+             RVData_DOC4)
 
 
         // properties
@@ -1379,26 +1555,19 @@ NB_MODULE(Data, m) {
         .def("get_RV_mean", &RVData::get_RV_mean, "Get the mean RV")
         .def("get_RV_var", &RVData::get_RV_var, "Get the variance of RVs")
         .def("get_RV_std", &RVData::get_RV_std, "Get the standard deviation of RVs")
+        // 
+        .def("get_actind_min", &RVData::get_actind_min, "Get the minimum value of activity indicator i")
+        .def("get_actind_max", &RVData::get_actind_max, "Get the maximum value of activity indicator i")
+        .def("get_actind_span", &RVData::get_actind_span, "Get the span of activity indicator i")
+        .def("get_actind_mean", &RVData::get_actind_mean, "Get the mean of activity indicator i")
+        .def("get_actind_var", &RVData::get_actind_var, "Get the variance of activity indicator i")
+        .def("get_actind_std", &RVData::get_actind_std, "Get the standard deviation of activity indicator i")
+        // 
         .def("topslope", &RVData::topslope, "Get the maximum slope allowed by the data")
-        .def("get_trend_magnitude", &RVData::get_trend_magnitude, "degree"_a, "i"_a = -1, "Order of magnitude of trend coefficient (of degree) given the data")
+        .def("get_trend_magnitude", &RVData::get_trend_magnitude, "degree"_a, "i"_a = -1, 
+             "Order of magnitude for trend coefficient (of `degree`) given the data")
         .def("get_unique_t", &RVData::get_unique_t, "Get the unique times")
-        .def("_inverse_time_indices", &RVData::_inverse_time_indices, "")
-        // ...
-        .def("load", &RVData::load, "filename"_a, "units"_a, "skip"_a, "max_rows"_a, "delimiter"_a, "indicators"_a,
-            //  nb::raw_doc(
-             R"D(
-Load RV data from a tab/space separated file with columns
-```
-time  vrad  error  quant  error
-...   ...   ...    ...    ...
-```
-Args:
-    filename (str): the name of the file
-    untis (str): units of the RVs and errors, either "kms" or "ms"
-    skip (int): number of lines to skip in the beginning of the file (default = 2)
-    indicators (list[str]): nodoc
-)D");
-// )
+        .def("_inverse_time_indices", &RVData::_inverse_time_indices, "");
 
     // 
 
@@ -1419,7 +1588,7 @@ Args:
         // constructor
         .def(nb::init<const string&, const string&, int, int, const string&>(),
               "filename"_a, "units"_a="ms", "skip"_a=0, "max_rows"_a=0, "delimiter"_a=" \t,",
-              "Load astrometric data from a file")
+              GAIAdata_DOC)
         // properties
         .def_ro("datafile", &GAIAdata::_datafile, "The file name")
         //

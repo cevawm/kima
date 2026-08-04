@@ -100,12 +100,14 @@ class KIMA_API RVData {
 
     // read data from arrays
     RVData(const vector<double> t, const vector<double> y, const vector<double> sig,
+           const vector<vector<double>> indicators=vector<vector<double>>(),
            const string& units="ms", const string& instrument="");
     
     // read data from arrays for multiple instruments
     RVData(const vector<vector<double>> t, 
            const vector<vector<double>> y, 
            const vector<vector<double>> sig,
+           const vector<vector<vector<double>>> indicators=vector<vector<vector<double>>>(),
            const string& units="ms", const vector<string>& instruments={});
 
     friend ostream& operator<<(ostream& os, const RVData& d);
@@ -198,9 +200,9 @@ class KIMA_API RVData {
     const vector<vector<double>>& get_actind() const { return actind; }
 
     /// Get the mininum value of Activity Indicator i
-    double get_actind_min(size_t i) const { return *min_element(actind.at(i).begin(), actind.at(i).end()); }
+    double get_actind_min(size_t i) const;
     /// Get the maximum value of Activity Indicator i
-    double get_actind_max(size_t i) const { return *max_element(actind.at(i).begin(), actind.at(i).end()); }
+    double get_actind_max(size_t i) const;
     /// Get the span of Activity Indicator i
     double get_actind_span(size_t i) const { return get_actind_max(i) - get_actind_min(i); }
     /// Get the mean of Activity Indicator i
