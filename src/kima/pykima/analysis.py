@@ -122,6 +122,32 @@ def compute_values_from_ratios(S, ratios):
     values = [a1 * t for t in terms]
     return values
 
+def compute_values_from_ratios_log(logS, ratios):
+    """
+    Given a value for the log of the sum logS and a list of ratios between
+    consecutive terms, returns the log of all terms a_1, a_2, ..., a_n.
+
+    Args:
+        logS (float): log of the sum S
+        ratios (list): ratios between consecutive terms
+
+    Returns:
+        list of log of values [log(a1), ..., log(an)]
+    """
+    from scipy.special import logsumexp
+    # Step 1: build log(T_i)
+    log_terms = [0.0]  # log(1)
+    for r in ratios:
+        log_terms.append(log_terms[-1] + np.log(r))
+
+    # Step 2: compute log(sum T_i)
+    log_sum_T = logsumexp(log_terms)
+
+    # Step 3: compute log(a1)
+    log_a1 = logS - log_sum_T
+
+    return [log_a1 + lt for lt in log_terms]
+
 
 def star_mass_samples(star_mass, star_mass_uncertainty, n):
     from scipy.stats import truncnorm
@@ -1199,7 +1225,7 @@ def true_within_hdi(results, truths, hdi_prob=0.95, only_periods=False,
 
             # if the argument of periastron is not fixed
             if 'Fixed' not in str(results.priors['wprior']):
-                wint = Interval(*hdi(results.Omega[mask], hdi_prob))
+                wint = Interval(*hdi(results.Omega[mask], hdi_prob)) #results.Omega doesnt exist anymore? Maybe?
                 w = truths[i][3]
                 found.append(w in wint)
                 within['w'] = w in wint
@@ -1500,6 +1526,73 @@ def reorder_P5(res, replace=False, until_detected=True,
             perm = perms[np.argmin(np.abs(dist))]
             new_posterior.P[i, j:] = sP[perm - j]
             new_posterior.K[i, j:] = sK[perm - j]
+            for field in fields:
+                try:
+                    arr = getattr(new_posterior, field)
+                    arr[i, j:] = arr[i, j:][perm - j]
+                except AttributeError:
+                    pass
+    if replace:
+        res.posteriors = new_posterior
+
+    return new_posterior
+
+def reorder_P5_ast(res, replace=False, until_detected=True,
+               sort_maximum_likelihood_by_a=True, printit=False):
+    from itertools import permutations
+    from copy import deepcopy
+    from tqdm import tqdm
+    from warnings import warn
+    # warn('this function does not change res.posterior_sample even if replace=True') #I believe it does replace
+
+    # make a copy of the posterior samples
+    new_posterior = deepcopy(res.posteriors)
+    fields = ('e', 'w', 'φ',
+              'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg', 'cosi', 'A','B','F','G')
+    # the maximum likelihood sample will serve as reference
+    p = res.maximum_likelihood_sample(printit=False)
+
+    if sort_maximum_likelihood_by_a:
+        sorta = np.argsort(p[res.indices['planets.a']])[::-1]
+        p[res.indices['planets.P']] = p[res.indices['planets.P']][sorta]
+        p[res.indices['planets.a']] = p[res.indices['planets.a']][sorta]
+        p[res.indices['planets.e']] = p[res.indices['planets.e']][sorta]
+        p[res.indices['planets.w']] = p[res.indices['planets.w']][sorta]
+        p[res.indices['planets.W']] = p[res.indices['planets.W']][sorta]
+        p[res.indices['planets.φ']] = p[res.indices['planets.φ']][sorta]
+        p[res.indices['planets.cosi']] = p[res.indices['planets.cosi']][sorta]
+
+    if printit:
+        res.print_sample(p)
+
+    # covariance estimation...
+    logL = res.posterior_lnlike[:, 1]
+    errorP = new_posterior.P[logL > np.percentile(logL, 84)].std(axis=0)
+    errora = new_posterior.a[logL > np.percentile(logL, 84)].std(axis=0)
+
+    # do reordering for all planets or until detected
+    maximum = np_bayes_factor_threshold(res) if until_detected else res.npmax - 1
+
+    for j in range(maximum):
+        # all possible permutations of the columns after the jth
+        perms = list(map(np.array, permutations(range(j, res.npmax))))
+        # reference period and semi-amplitude
+        refP = p[res.indices['planets.P']][j]
+        refa = p[res.indices['planets.a']][j]
+        # for each sample
+        for i, (sP, sa) in enumerate(tqdm(zip(new_posterior.P, new_posterior.a), total=res.ESS)):
+            sP = sP[j:]
+            sa = sa[j:]
+            dist = [
+                np.hypot(
+                    (sP[perm - j] - refP)[0] / errorP[j],
+                    (sa[perm - j] - refa)[0] / errora[j]
+                )
+                for perm in perms
+            ]
+            perm = perms[np.argmin(np.abs(dist))]
+            new_posterior.P[i, j:] = sP[perm - j]
+            new_posterior.a[i, j:] = sa[perm - j]
             for field in fields:
                 try:
                     arr = getattr(new_posterior, field)

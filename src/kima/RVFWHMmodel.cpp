@@ -8,9 +8,9 @@ const double halflog2pi = 0.5*log(2.*M_PI);
 
 void RVFWHMmodel::initialize_from_data(RVData& data)
 {
-    if (data.actind.size() < 2) // need at least one activity indicator (the FWHM)
+    if (data.actind.size() < 2) // need at least one activity indicator (the FWHM) and uncertainties
     {
-        std::string msg = "kima: RVFWHMmodel: no data for activity indicators (FWHM)";
+        std::string msg = "kima: RVFWHMmodel: not enough data for FWHM (missing uncertainties?)";
         throw std::runtime_error(msg);
     }
 
@@ -1130,7 +1130,8 @@ string RVFWHMmodel::description() const
 
 void RVFWHMmodel::save_setup() {
 	std::fstream fout("kima_model_setup.txt", std::ios::out);
-    fout << std::boolalpha;
+    fout << std::boolalpha << std::fixed;
+    fout.precision(15);
 
     fout << "; " << timestamp() << endl << endl;
 
@@ -1171,9 +1172,7 @@ void RVFWHMmodel::save_setup() {
         fout << f << ",";
     fout << endl;
 
-    fout.precision(15);
     fout << "M0_epoch: " << data.M0_epoch << endl;
-    fout.precision(6);
 
     fout << endl;
 

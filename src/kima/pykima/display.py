@@ -26,6 +26,7 @@ except ImportError:
 dty = 1/365.25
 dty2 = dty**2
 dty3 = dty**3
+twopi = 2 * np.pi
 
 
 def make_plots(res, options, save_plots=False):
@@ -459,6 +460,12 @@ def plot_PKE(res, mask=None, include_known_object=False, include_transiting_plan
     period and for eccentricity and orbital period. If `points` is True, plot
     each posterior sample, else plot hexbins
     """
+    if res.model is MODELS.GAIAmodel:
+        print('For the GAIAmodel, since K is not a parameter it is replaced with a')
+        gaia = True
+    else:
+        gaia = False
+        
     # if no known_object or not showing known_object periods
     cond = not res.KO or not include_known_object
     # and if no transiting_planet or not showing transiting_planet periods
@@ -479,21 +486,33 @@ def plot_PKE(res, mask=None, include_known_object=False, include_transiting_plan
             from .analysis import reorder_P
             post = reorder_P(res)
             P = post.P.copy()
-            K = post.K.copy()
+            if gaia:
+                K = post.a.copy()
+            else:
+                K = post.K.copy()
             E = post.e.copy()
         elif sort_by_increasing_P:
             from .analysis import sort_planet_samples
             post = sort_planet_samples(res)
             P = post.P.copy()
-            K = post.K.copy()
+            if gaia:
+                K = post.a.copy()
+            else:
+                K = post.K.copy()
             E = post.e.copy()
         else:
             P = res.posteriors.P.copy()
-            K = res.posteriors.K.copy()
+            if gaia:
+                K = res.posteriors.a.copy()
+            else:
+                K = res.posteriors.K.copy()
             E = res.posteriors.e.copy()
     else:
         P = res.posteriors.P[mask].copy()
-        K = res.posteriors.K[mask].copy()
+        if gaia:
+            K = res.posteriors.a[mask].copy()
+        else:
+            K = res.posteriors.K[mask].copy()
         E = res.posteriors.e[mask].copy()
 
     include_known_object = include_known_object and res.KO
@@ -504,8 +523,12 @@ def plot_PKE(res, mask=None, include_known_object=False, include_transiting_plan
         else:
             KOpars = res.posterior_sample[mask, res.indices['KOpars']]
         P_KO = np.hstack(KOpars[:, 0 * res.nKO:1 * res.nKO])
-        K_KO = np.hstack(KOpars[:, 1 * res.nKO:2 * res.nKO])
-        E_KO = np.hstack(KOpars[:, 3 * res.nKO:4 * res.nKO])
+        if gaia:
+            K_KO = np.hstack(KOpars[:, 3 * res.nKO:4 * res.nKO])
+            E_KO = np.hstack(KOpars[:, 2 * res.nKO:3 * res.nKO])
+        else:
+            K_KO = np.hstack(KOpars[:, 1 * res.nKO:2 * res.nKO])
+            E_KO = np.hstack(KOpars[:, 3 * res.nKO:4 * res.nKO])
 
     include_transiting_planet = include_transiting_planet and res.TR
 
@@ -581,7 +604,10 @@ def plot_PKE(res, mask=None, include_known_object=False, include_transiting_plan
             for i in range(res.nKO):
                 if f'KO_Pprior_{i}' in res.priors:
                     P_KO_prior.append(distribution_rvs(res.priors[f'KO_Pprior_{i}'], n))
-                    K_KO_prior.append(distribution_rvs(res.priors[f'KO_Kprior_{i}'], n))
+                    if gaia:
+                        K_KO_prior.append(distribution_rvs(res.priors[f'KO_aprior_{i}'], n))
+                    else:
+                        K_KO_prior.append(distribution_rvs(res.priors[f'KO_Kprior_{i}'], n))
                     E_KO_prior.append(distribution_rvs(res.priors[f'KO_eprior_{i}'], n))
                 else:
                     break
@@ -590,7 +616,10 @@ def plot_PKE(res, mask=None, include_known_object=False, include_transiting_plan
 
         try:
             P_prior = distribution_rvs(res.priors['Pprior'], n)
-            K_prior = distribution_rvs(res.priors['Kprior'], n)
+            if gaia:
+                K_prior = distribution_rvs(res.priors['aprior'], n)
+            else:
+                K_prior = distribution_rvs(res.priors['Kprior'], n)
             E_prior = distribution_rvs(res.priors['eprior'], n)
             ax1.plot(P_prior, K_prior, '.', **kw_prior)
             ax2.plot(P_prior, E_prior, '.', **kw_prior)
@@ -623,12 +652,18 @@ def plot_PKE(res, mask=None, include_known_object=False, include_transiting_plan
         #     ax.vlines(alias_solar_day, 0, ymax, color='k', ls='--', alpha=0.1)
         #     ax.vlines(alias_sidereal_day, 0, ymax, color='k', ls='--', alpha=0.1)
         # ax.set_xlim(np.min(alias_solar_day), None)
-
-    ax1.set(ylabel='Semi-amplitude [m/s]',
-            title='Joint posterior semi-amplitude $-$ orbital period')
-    ax2.set(ylabel='Eccentricity', xlabel='Period [days]',
-            title='Joint posterior eccentricity $-$ orbital period',
-            ylim=[0, 1])
+    if gaia:
+        ax1.set(ylabel='Photocentre Semi-major-axis [mas]',
+                title='Joint posterior semi-major-axis $-$ orbital period')
+        ax2.set(ylabel='Eccentricity', xlabel='Period [days]',
+                title='Joint posterior eccentricity $-$ orbital period',
+                ylim=[0, 1])
+    else:
+        ax1.set(ylabel='Semi-amplitude [m/s]',
+                title='Joint posterior semi-amplitude $-$ orbital period')
+        ax2.set(ylabel='Eccentricity', xlabel='Period [days]',
+                title='Joint posterior eccentricity $-$ orbital period',
+                ylim=[0, 1])
 
     # if show_prior:
     #     try:
@@ -1144,7 +1179,7 @@ def corner_orbital(samples, labels=None, units=None, ranges=None, priors=None,
 
             ax.margins(x=0)
 
-            if priors[i] is not None:
+            if priors[i] is not None: #Bug? can plot hist just from name of prior??
                 xlim = ax.get_xlim()
                 prior_kwargs.setdefault('color', 'C0')
                 prior_kwargs.setdefault('alpha', 0.2)
@@ -1358,9 +1393,13 @@ def corner_planet_parameters(res, fig=None, Np=None, true_values=None, period_ra
                              true_value_label='', true_value_kwargs={}, **kwargs):
     """ Corner plots of the posterior samples for the planet parameters """
 
-    if res.model is MODELS.GAIAmodel:
-        labels = ['$P$',  r'$\phi$', 'e', 'a',  r'$\omega$', r'$\cos i$', 'W']
-        units  = ['days', 'rad',     '',  'AU', 'rad',       '',          'rad']
+    if res.model in (MODELS.GAIAmodel,MODELS.RVGAIAmodel):
+        if res.thiele_innes:
+            labels = ['$P$',  r'$\phi$', 'e', 'A',   'B',  'F',  'G']
+            units  = ['days', 'rad',     '', 'mas', 'mas', 'mas', 'mas']
+        else:
+            labels = ['$P$',  r'$\phi$', 'e', 'a',  r'$\omega$', r'$\cos i$', 'W']
+            units  = ['days', 'rad',     '',  'mas', 'rad',       '',          'rad']
     elif res.model is MODELS.RVHGPMmodel:
         if replace_angles_with_mass:
             labels = ['$P$',  '$K$', '$e$', '$M_p$',          '$a$']
@@ -1473,20 +1512,42 @@ def corner_planet_parameters(res, fig=None, Np=None, true_values=None, period_ra
                 a,
             ]
         else:
-            samples = np.c_[
-                res.posteriors.P[:, i].copy(),
-                res.posteriors.K[:, i].copy(),
-                res.posteriors.e[:, i].copy(),
-                res.posteriors.φ[:, i].copy(),
-                res.posteriors.w[:, i].copy(),
-            ]
-
-            if res.model is MODELS.RVHGPMmodel:
+            if res.model in (MODELS.GAIAmodel,MODELS.RVGAIAmodel):
+                if res.thiele_innes:
+                    samples = np.c_[
+                        res.posteriors.P[:, i].copy(),
+                        res.posteriors.e[:, i].copy(),
+                        res.posteriors.φ[:, i].copy(),
+                        res.posteriors.A[:, i].copy(),
+                        res.posteriors.B[:, i].copy(),
+                        res.posteriors.F[:, i].copy(),
+                        res.posteriors.G[:, i].copy(),
+                    ]
+                else:
+                    samples = np.c_[
+                        res.posteriors.P[:, i].copy(),
+                        res.posteriors.e[:, i].copy(),
+                        res.posteriors.φ[:, i].copy(),
+                        res.posteriors.a[:, i].copy(),
+                        res.posteriors.w[:, i].copy(),
+                        res.posteriors.W[:, i].copy(),
+                        res.posteriors.cosi[:, i].copy(),
+                    ]
+            else:
                 samples = np.c_[
-                    samples,
-                    res.posteriors.i[:, i].copy(),
-                    res.posteriors.Ω[:, i].copy()
+                    res.posteriors.P[:, i].copy(),
+                    res.posteriors.K[:, i].copy(),
+                    res.posteriors.e[:, i].copy(),
+                    res.posteriors.φ[:, i].copy(),
+                    res.posteriors.w[:, i].copy(),
                 ]
+
+                if res.model is MODELS.RVHGPMmodel:
+                    samples = np.c_[
+                        samples,
+                        res.posteriors.i[:, i].copy(),
+                        res.posteriors.Ω[:, i].copy()
+                    ]
 
 
         if wrap_M0 and not replace_angles_with_mass:
@@ -1509,21 +1570,27 @@ def corner_planet_parameters(res, fig=None, Np=None, true_values=None, period_ra
 
         priors = None
         if show_prior:
-            priors = [res.priors[k] for k in ['Pprior', 'Kprior', 'eprior', 'phiprior', 'wprior']]
-            if res.model is MODELS.RVHGPMmodel:
-                priors += [res.priors[k] for k in ['iprior', 'Omegaprior']]
-            priors = [distribution_rvs(p, res.ESS) if p else None for p in priors]
+            if res.model in (MODELS.GAIAmodel,MODELS.RVGAIAmodel):
+                if res.thiele_innes:
+                    priors = [res.priors[k] for k in ['Pprior', 'eprior', 'phiprior', 'Aprior', 'Bprior', 'Fprior', 'Gprior']]
+                else:
+                    priors = [res.priors[k] for k in ['Pprior', 'eprior', 'phiprior', 'aprior', 'wprior', 'Wprior', 'cosiprior']]
+            else:
+                priors = [res.priors[k] for k in ['Pprior', 'Kprior', 'eprior', 'phiprior', 'wprior']]
+                if res.model is MODELS.RVHGPMmodel:
+                    priors += [res.priors[k] for k in ['iprior', 'Wprior']]
+                priors = [distribution_rvs(p, res.ESS) if p else None for p in priors]
 
-            if replace_angles_with_mass:
-                (*_, m), (*_, a), _ = get_planet_mass_and_semimajor_axis(
-                    priors[0], priors[1], priors[2], 
-                    star_mass=star_mass, full_output=True
-                )
-                if mass_units == 'mearth':
-                    m *= mjup2mearth
-                a *= a_factor
-                priors[3] = m
-                priors[4] = a
+                if replace_angles_with_mass:
+                    (*_, m), (*_, a), _ = get_planet_mass_and_semimajor_axis(
+                        priors[0], priors[1], priors[2], 
+                        star_mass=star_mass, full_output=True
+                    )
+                    if mass_units == 'mearth':
+                        m *= mjup2mearth
+                    a *= a_factor
+                    priors[3] = m
+                    priors[4] = a
 
         fig, axs = corner_orbital(samples, labels=labels, units=units, 
                                   priors=priors, truths=true_values[i], ranges=ranges,
@@ -2299,92 +2366,10 @@ def hist_nu(res, show_prior=False, **kwargs):
             except Exception as e:
                 print(str(e))
 
-def plot_RVData(data, **kwargs):
-    """ Simple plot of RV data. **kwargs are passed to plt.errorbar() """
-    t = np.array(data.t).copy()
-    y = np.array(data.y).copy()
-    e = np.array(data.sig).copy()
-    obs = np.array(data.obsi).copy()
-    sb2 = data.double_lined
-    if sb2:
-        y2 = np.array(data.y2).copy()
-        e2 = np.array(data.sig2).copy()
 
-
-    time_offset = False
-    if t[0] > 24e5:
-        time_offset = True
-        t -= 24e5
-
-    fig, ax = plt.subplots(1, 1, constrained_layout=True)
-
-    kw = dict(fmt='o', ms=3)
-    kw.update(**kwargs)
-
-    if data.multi:
-        uobs = np.unique(obs)
-        for i in uobs:
-            mask = obs == i
-            ax.errorbar(t[mask], y[mask], e[mask], **kw)  
-            if sb2:
-                ax.errorbar(t[mask], y2[mask], e2[mask], mfc='none', **kw)  
-    else:
-        ax.errorbar(t, y, e,  **kw)
-        if sb2:
-            ax.errorbar(t, y2, e2, mfc='none', **kw)
-
-    if time_offset:
-        ax.set(xlabel='BJD - 2400000 [days]', ylabel='RV [m/s]')
-    else:
-        ax.set(xlabel='Time [days]', ylabel='RV [m/s]')
-    return fig, ax
-
-def plot_HGPMdata(data, pm_ra_bary=None, pm_dec_bary=None, 
-                  show_legend=True, **kwargs):
-    fig, axs = plt.subplots(1, 4, width_ratios=[4, 0.6, 4, 0.6], #height_ratios=[4, 2], 
-                            constrained_layout=True, figsize=(7, 3))
-
-    if pm_ra_bary is None and pm_dec_bary is None:
-        f1, f2 = 1.0, 1.0
-    else:
-        f1, f2 = pm_ra_bary, pm_dec_bary
-
-    kwH = dict(fmt='o', ms=4, color='C0')
-    kwG = dict(fmt='o', ms=4, color='C1')
-    kw = dict(fmt='o', ms=4, color='k')
-
-    axs[0].errorbar(data.epoch_ra_hip - 5e4, data.pm_ra_hip, data.sig_hip_ra, **kwH)
-    axs[0].errorbar(data.epoch_ra_gaia - 5e4, data.pm_ra_gaia, data.sig_gaia_ra, **kwG)
-    axs[1].errorbar(0.5, data.pm_ra_hg, data.sig_hg_ra, **kw, mfc="w")
-    axs[1].axhline(data.pm_ra_hg, color="k", zorder=-1)
-    axs[1].set(yticks=[], xticks=[], xlim=(0, 1))
-    axs[1].sharey(axs[0])
-    axs[1].tick_params(left=False, labelleft=False)
-
-    axs[2].errorbar(data.epoch_dec_hip - 5e4, data.pm_dec_hip, data.sig_hip_dec, **kwH)
-    axs[2].errorbar(data.epoch_dec_gaia - 5e4, data.pm_dec_gaia, data.sig_gaia_dec, **kwG)
-    axs[3].errorbar(0.5, data.pm_dec_hg, data.sig_hg_dec, **kw, mfc='w')
-    axs[3].axhline(data.pm_dec_hg, color='k', zorder=-1)
-    axs[3].set(yticks=[], xticks=[])
-    axs[3].sharey(axs[2])
-    axs[3].tick_params(left=False, labelleft=False)
-
-    axs[0].set(xlabel='Epoch [BJD - 2450000]', ylabel=r'$\mu$ RA [mas/yr]')
-    axs[2].set(xlabel='Epoch [BJD - 2450000]', ylabel=r'$\mu$ Dec [mas/yr]')
-    # mi, ma = min(axs[0].get_ylim()[0], axs[1].get_ylim()[0]), max(axs[0].get_ylim()[1], axs[1].get_ylim()[1])
-    # axs[0].set(ylim=(mi, ma))
-    # axs[1].set(ylim=(mi, ma))
-    # axs[1, 1].axis('off')
-    # axs[1, 3].axis('off')
-
-    if show_legend:
-        axs[0].legend(['Hipparcos', 'Gaia'], ncols=2,
-                      bbox_to_anchor=(0, 1.11), loc='upper left')
-    return fig, axs
-
-
-def plot_data(res, ax=None, axf=None, axr=None, y=None, e=None, y2=None, y3=None, extract_offset=True,
-              ignore_y2=False, ignore_y3=False, time_offset=0.0, highlight=None,
+def plot_data(res, ax=None, axf=None, axr=None, y=None, e=None, y2=None, y3=None, 
+              ignore_y2=False, ignore_y3=False,
+              extract_offset=True, time_offset=0.0, highlight=None,
               legend=True, show_rms=False, outliers=None, offsets=None, secondary_star=False, sample=None, **kwargs):
 
     fwhm_model = res.model is MODELS.RVFWHMmodel and not ignore_y2
@@ -2881,9 +2866,9 @@ def phase_plot_logic(res, sample, sort_by_decreasing_K=False, sort_by_increasing
         params[k]['φ'] = φ = sample[res.indices['planets.φ']][i]
         params[k]['w'] = w = sample[res.indices['planets.w']][i]
         if res.model is MODELS.RVGAIAmodel:
-            params[k]['a0'] = a0 = sample[res.indices['planets.a0']][i]
+            params[k]['a'] = a = sample[res.indices['planets.a']][i]
             params[k]['cosi'] = cosi = sample[res.indices['planets.cosi']][i]
-            params[k]['K'] = K = Kfroma0(P,a0,e,cosi,plx)
+            params[k]['K'] = K = Kfroma0(P,a,e,cosi,plx)
         else:
             params[k]['K'] = K = sample[res.indices['planets.K']][i]
         params[k]['Tp'] = M0_epoch - (P * φ) / (2*np.pi)
@@ -2912,15 +2897,18 @@ def phase_plot_logic(res, sample, sort_by_decreasing_K=False, sort_by_increasing
                     ko[k]['wdot'] = wdot = sample[res.indices['KOpars']][i + 5 * res.nKO]
                     ko[k]['cosi'] = cosi = sample[res.indices['KOpars']][i + 6 * res.nKO]
             else:
-                ko[k]['φ'] = φ = sample[res.indices['KOpars']][i + 2 * res.nKO]
-                ko[k]['e'] = e = sample[res.indices['KOpars']][i + 3 * res.nKO]
-                ko[k]['w'] = w = sample[res.indices['KOpars']][i + 4 * res.nKO]
                 if res.model is MODELS.RVGAIAmodel:
-                    ko[k]['a0'] = a0 = sample[res.indices['KOpars']][i + res.nKO]
+                    ko[k]['φ'] = φ = sample[res.indices['KOpars']][i + 1 * res.nKO]
+                    ko[k]['e'] = e = sample[res.indices['KOpars']][i + 2 * res.nKO]
+                    ko[k]['a'] = a = sample[res.indices['KOpars']][i + 3 * res.nKO]
+                    ko[k]['w'] = w = sample[res.indices['KOpars']][i + 4 * res.nKO]
                     ko[k]['cosi'] = cosi = sample[res.indices['KOpars']][i + 5 * res.nKO]
-                    ko[k]['K'] = K = Kfroma0(P,a0,e,cosi,plx)
+                    ko[k]['K'] = K = Kfroma0(P,a,e,cosi,plx)
                 else:
-                    ko[k]['K'] = K = sample[res.indices['KOpars']][i + res.nKO]
+                    ko[k]['φ'] = φ = sample[res.indices['KOpars']][i + 2 * res.nKO]
+                    ko[k]['e'] = e = sample[res.indices['KOpars']][i + 3 * res.nKO]
+                    ko[k]['w'] = w = sample[res.indices['KOpars']][i + 4 * res.nKO]
+                    ko[k]['K'] = K = sample[res.indices['KOpars']][i + 1 * res.nKO]
             ko[k]['Tp'] = M0_epoch - (P * φ) / (2*np.pi)
             ko[k]['type'] = 'KO'
             ko[k]['index'] = -pj - 1
@@ -3005,16 +2993,20 @@ def phase_plot(res, sample, phase_axs=None, xaxis='mean anomaly',
         one, the layout of the axes in the figure may not always be optimal.
     """
 
-    if res.max_components == 0 and not res.KO and not res.TR:
-        print('Model has no planets! phase_plot() doing nothing...')
-        return
+    # if res.max_components == 0 and not res.KO and not res.TR:
+    #     print('Model has no planets! phase_plot() doing nothing...')
+    #     return
 
     if res.model is MODELS.GAIAmodel:
         astrometry_phase_plot(res, sample, dates=dates, date_sub=date_sub, colormap=colormap,include_jitter=include_jitter)
         return
     elif res.model is MODELS.RVGAIAmodel:
         astrometry_phase_plot(res, sample, dates=dates, date_sub=date_sub, colormap=colormap,include_jitter=include_jitter)
-
+        if res.max_components == 0 and not res.KO and not res.TR:
+            return
+    elif res.max_components == 0 and not res.KO and not res.TR:
+        print('Model has no planets! phase_plot() doing nothing...')
+        return
 
     if xaxis not in ('mean anomaly', 'mean longitude'):
         raise ValueError(f'`xaxis` must be "mean anomaly" or "mean longitude", got {xaxis}')
@@ -3570,8 +3562,6 @@ def astrometry_phase_plot_logic(res, sample, sort_by_decreasing_a=False, sort_by
 
     nplanets = int(sample[res.indices['np']])
 
-    
-
     pj = 0
     nKOs = 0
     if res.KO:
@@ -3581,9 +3571,9 @@ def astrometry_phase_plot_logic(res, sample, sort_by_decreasing_a=False, sort_by
         nplanets += res.nKO
         for i, k in enumerate(params.keys()):
             params[k]['P'] = P = sample[res.indices['KOpars']][i]
-            params[k]['a0'] = a0 = sample[res.indices['KOpars']][i + 1 * res.nKO]
-            params[k]['φ'] = φ = sample[res.indices['KOpars']][i + 2 * res.nKO]
-            params[k]['e'] = e = sample[res.indices['KOpars']][i + 3 * res.nKO]
+            params[k]['φ'] = φ = sample[res.indices['KOpars']][i + 1 * res.nKO]
+            params[k]['e'] = e = sample[res.indices['KOpars']][i + 2 * res.nKO]
+            params[k]['a'] = a = sample[res.indices['KOpars']][i + 3 * res.nKO]
             params[k]['w'] = w = sample[res.indices['KOpars']][i + 4 * res.nKO]
             params[k]['cosi'] = cosi = sample[res.indices['KOpars']][i + 5 * res.nKO]
             params[k]['W'] = W = sample[res.indices['KOpars']][i + 6 * res.nKO]
@@ -3606,7 +3596,7 @@ def astrometry_phase_plot_logic(res, sample, sort_by_decreasing_a=False, sort_by
             planets[k]['F'] = F = sample[res.indices['planets.F']][i]
             planets[k]['G'] = G = sample[res.indices['planets.G']][i]
         else:
-            planets[k]['a0'] = a0 = sample[res.indices['planets.a0']][i]
+            planets[k]['a'] = a = sample[res.indices['planets.a']][i]
             planets[k]['w'] = w = sample[res.indices['planets.w']][i]
             planets[k]['cosi'] = cosi = sample[res.indices['planets.cosi']][i]
             planets[k]['W'] = W = sample[res.indices['planets.W']][i]
@@ -3618,7 +3608,7 @@ def astrometry_phase_plot_logic(res, sample, sort_by_decreasing_a=False, sort_by
     keys = list(params.keys())
 
     if sort_by_decreasing_a:
-        keys = sorted(params, key=lambda i: params[i]['a0'], reverse=True)
+        keys = sorted(params, key=lambda i: params[i]['a'], reverse=True)
 
     if sort_by_increasing_P:
         keys = sorted(params, key=lambda i: params[i]['P'])
@@ -3632,7 +3622,6 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
     except ImportError:
         raise ImportError('pystrometry is required for astrometry phase plots')
 
-    twopi = 2 * np.pi
     from ..kepler import brandt_solver
 
     def ellip_rectang(t, P, e, Tper):
@@ -3685,17 +3674,17 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
     def wss_dep(da,dd,par,mua,mud,t,pfra,pfdec,tref):
         #Obtain RA and DEC values for parallax and PM plot curve
         T = t - tref
-        return (da + mua*T) + pfra*par,(dd +mud*T)+pfdec*par
+        return (da + mua*dty*T) + pfra*par,(dd +mud*dty*T)+pfdec*par
     
     def wss_dep_errs(alpha_res,dec_res,alpha_err,dec_err,da,dd,par,mua,mud,t,pf_ra,pf_dec,tref):
         #Obtain RA and DEC values and errors for parallax and PM plot points
         T = t - tref
-        ra = (da + mua*T) + pf_ra*par + alpha_res
-        raplus = (da + mua*T) + pf_ra*par + alpha_res + alpha_err
-        raminus = (da + mua*T) + pf_ra*par + alpha_res - alpha_err
-        dec = (dd +mud*T) + pf_dec*par + dec_res
-        decplus = (dd +mud*T) + pf_dec*par + dec_res + dec_err
-        decminus = (dd +mud*T) + pf_dec*par + dec_res - dec_err
+        ra = (da + mua*dty*T) + pf_ra*par + alpha_res
+        raplus = (da + mua*dty*T) + pf_ra*par + alpha_res + alpha_err
+        raminus = (da + mua*dty*T) + pf_ra*par + alpha_res - alpha_err
+        dec = (dd +mud*dty*T) + pf_dec*par + dec_res
+        decplus = (dd +mud*dty*T) + pf_dec*par + dec_res + dec_err
+        decminus = (dd +mud*dty*T) + pf_dec*par + dec_res - dec_err
         return ra,raplus,raminus,dec,decplus,decminus    
 
     t = np.array(res.GAIAdata.t)
@@ -3724,11 +3713,11 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
         jerka, jerkd = 0, 0
         nextras += 1
 
-    if res.al_scan_bias:
-        al_scan_bias_params = sample[res.indices['al_scan_bias']]
+    if res.scan_dep_signal:
+        scan_dep_signal_params = sample[res.indices['scan_dep_signal']]
         nextras += 1
 
-    # P, phi, e, a0, w, cosi, W = sample[res.indices['planets']]
+    # P, phi, e, a, w, cosi, W = sample[res.indices['planets']]
 
     nrows = {
         0: 3, 1: 3, 2: 3, 3: 4,
@@ -3786,7 +3775,7 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
     
     #Get full model
     for letter in keys:
-        # P, phi, e, a0, w, cosi, W, Tper, type, index = params[letter]
+        # P, phi, e, a, w, cosi, W, Tper, type, index = params[letter]
         P = params[letter]['P']
         phi = params[letter]['φ']
         e = params[letter]['e']
@@ -3796,20 +3785,20 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
             F = params[letter]['F']
             G = params[letter]['G']
         else:
-            a0 = params[letter]['a0']
+            a = params[letter]['a']
             w = params[letter]['w']
             cosi = params[letter]['cosi']
             W = params[letter]['W']
-            A,B,F,G = Thiele_Innes(a0,w,W,cosi)
+            A,B,F,G = Thiele_Innes(a,w,W,cosi)
         Tper = params[letter]['Tp']
 
         wmodel += wk_orb_TI(P, Tper, e, A, B, F, G, t, psi)
     
     #add scan-angle bias signal
-    if res.al_scan_bias:
-        for j in range(res.n_bias_comps):
-            Ak = al_scan_bias_params[j]
-            thetak = al_scan_bias_params[j+res.n_bias_comps]
+    if res.scan_dep_signal:
+        for j in range(res.n_scan_dep_comps):
+            Ak = scan_dep_signal_params[j]
+            thetak = scan_dep_signal_params[j+res.n_scan_dep_comps]
             k = 2*j + 3
             wmodel += wscanbias(Ak,thetak,k,psi)
 
@@ -3905,11 +3894,11 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
             F = params[letter]['F']
             G = params[letter]['G']
         else:
-            a0 = params[letter]['a0']
+            a = params[letter]['a']
             w = params[letter]['w']
             cosi = params[letter]['cosi']
             W = params[letter]['W']
-            A,B,F,G = Thiele_Innes(a0,w,W,cosi) 
+            A,B,F,G = Thiele_Innes(a,w,W,cosi) 
         Tper = params[letter]['Tp']  
         
 
@@ -3950,16 +3939,16 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
     addind += len(keys)
 
     #make plot for scan-angle bias
-    if res.al_scan_bias:
+    if res.scan_dep_signal:
         ax = axs[addind +1]
 
         psis = np.arange(-np.pi,np.pi,0.01)
         scan_model = np.zeros_like(psis)
 
         scan_data = wws.copy()
-        for j in range(res.n_bias_comps):
-            Ak = al_scan_bias_params[j]
-            thetak = al_scan_bias_params[j+res.n_bias_comps]
+        for j in range(res.n_scan_dep_comps):
+            Ak = scan_dep_signal_params[j]
+            thetak = scan_dep_signal_params[j+res.n_scan_dep_comps]
             k = 2*j + 3
             scan_data += wscanbias(Ak,thetak,k,psi)
             scan_model += wscanbias(Ak,thetak,k,psis)
@@ -3975,6 +3964,14 @@ def astrometry_phase_plot(res, sample, dates='jd', date_sub=None, colormap='plas
     resax.scatter(t,wws,c=t,cmap=colormap,zorder=3)
     resax.axhline(0,c='grey',zorder=1,alpha=0.8)
     resax.set(xlabel='Time ('+time_label+')',ylabel='Along-scan residuals (mas)')
+
+    if res.save_plots:
+        filename = 'kima-showresults-fig6.2.png'
+        print('saving in', filename)
+        fig.savefig(filename)
+
+    if res.return_figs:
+        return fig
 
 
 def corner_astrometric_solution(res, star_mass=1.0, adda=False, **kwargs):
@@ -4012,6 +4009,59 @@ def corner_astrometric_solution(res, star_mass=1.0, adda=False, **kwargs):
     fig.tight_layout()
     fig.subplots_adjust(wspace=0.25, hspace=0.15)
     return fig
+
+def hist_astrometric_solution(res, show_prior=False, axs=None, **kwargs):
+    if res.model != MODELS.GAIAmodel:
+        print('Model is not GAIAmodel! hist_astrometric_solution() doing nothing...')
+        return
+    
+    if axs is None:
+        fig, axs = plt.subplot_mosaic(
+            [['da', 'dd'], ['mua', 'mud'], 2*['plx']],
+            constrained_layout=True
+        )
+    else:
+        if len(axs) != 5:
+            raise ValueError('must provide 5 axes')
+        fig = axs[0].figure
+        axs = dict(da=axs[0], dd=axs[1], mua=axs[2], mud=axs[3], plx=axs[4])
+
+    bins = kwargs.get('bins', 'doane')
+    density = kwargs.get('density', True)
+    hist_kw = dict(bins=bins, density=density)
+    hist_prior_kw = dict(**hist_kw, alpha=0.15, color='k', zorder=-1)
+
+    estimate = percentile68_ranges_latex(res.posteriors.da)
+    axs['da'].hist(res.posteriors.da, label=estimate, **hist_kw)
+    estimate = percentile68_ranges_latex(res.posteriors.dd)
+    axs['dd'].hist(res.posteriors.dd, label=estimate, **hist_kw)
+    estimate = percentile68_ranges_latex(res.posteriors.mua)
+    axs['mua'].hist(res.posteriors.mua, label=estimate, **hist_kw)
+    estimate = percentile68_ranges_latex(res.posteriors.mud)
+    axs['mud'].hist(res.posteriors.mud, label=estimate, **hist_kw)
+    estimate = percentile68_ranges_latex(res.posteriors.plx)
+    axs['plx'].hist(res.posteriors.plx, label=estimate, **hist_kw)
+
+    if show_prior:
+        names = 'da_prior', 'dd_prior', 'mua_prior', 'mud_prior', 'parallax_prior'
+        for name, ax in zip(names, axs.values()):
+            prior = res.priors[name]
+            ax.hist(distribution_rvs(prior, size=res.ESS), 
+                    label='prior', **hist_prior_kw)
+
+    show_legend = kwargs.get('show_legend', True)
+    for i, ax in enumerate(axs.values()):
+        ax.set(yticks=[], ylabel='posterior')
+        if show_legend:
+            ax.legend()
+
+    axs['da'].set(xlabel=r'$d_a$ [mas]')
+    axs['dd'].set(xlabel=r'$d_d$ [mas]')
+    axs['mua'].set(xlabel=r'$\mu_a$ [mas/yr]')
+    axs['mud'].set(xlabel=r'$\mu_d$ [mas/yr]')
+    axs['plx'].set(xlabel=r'$\pi$ [mas]')
+
+    return fig, list(axs.values())
 
 
 def plot_hgpm(res, pm_data, ncurves=50, normalize=False,
@@ -4129,10 +4179,10 @@ def hist_bary(res, show_prior=False):
     return fig, axs
 
 
-def plot_random_samples(res, ncurves=50, samples=None, tt=None, over=0.1, ntt=5000,
+def plot_random_samples(res, ncurves=50, Np=None, samples=None, tt=None, toplike=70, over=0.1, ntt=5000,
                         subtract_offsets=False, clip_curves_to_data=False,
                         show_vsys=False, show_gp=True, isolate_known_object=True, isolate_transiting_planet=True,
-                        isolate_apodized_keplerians=True, include_jitters_in_points=False, 
+                        isolate_apodized_keplerians=True, include_jitters_in_points=False, colormap='plasma',
                         include_jitters_in_predict=True, full_plot=False, show_outliers=False, **kwargs):
     """
     Display the RV data together with curves from the posterior predictive. 
@@ -4140,6 +4190,8 @@ def plot_random_samples(res, ncurves=50, samples=None, tt=None, over=0.1, ntt=50
     Args:
         ncurves (int, optional):
             Number of posterior predictive curves to show.
+        Np (int optional):
+            If not specifying samples chose what number of planets to include
         samples (array, optional):
             Specific posterior sample(s) to plot.
         tt (array, optional):
@@ -4180,6 +4232,13 @@ def plot_random_samples(res, ncurves=50, samples=None, tt=None, over=0.1, ntt=50
         fig (matplotlib.figure.Figure):
             The figure with the plot
     """
+    if res.model is MODELS.GAIAmodel:
+        plot_random_samples_astrometry(res, Np ,ncurves, samples, toplike, isolate_known_object,
+                                    include_jitters_in_points, full_plot, colormap)
+        return
+    elif res.model is MODELS.RVGAIAmodel:
+        plot_random_samples_astrometry(res, Np ,ncurves, samples, toplike, isolate_known_object,
+                                    include_jitters_in_points, full_plot, colormap)
 
     SB2 = res.model is MODELS.BINARIESmodel and res.double_lined
 
@@ -4190,7 +4249,10 @@ def plot_random_samples(res, ncurves=50, samples=None, tt=None, over=0.1, ntt=50
         samples = np.atleast_2d(samples)
         samples_provided = True
 
-    mask = np.ones(samples.shape[0], dtype=bool)
+    if Np==None:
+        mask = np.ones(samples.shape[0], dtype=bool)
+    else:
+        mask = samples[:,res.indices['np']]==Np
 
     t = res.data.t.copy()
     M0_epoch = copy(res.M0_epoch)
@@ -4408,7 +4470,6 @@ def plot_random_samples_multiseries(res, ncurves=50, samples=None, over=0.1, ntt
     """
     full_plot = kwargs.pop('full_plot', False)
     rhk = res.model is MODELS.RVFWHMRHKmodel
-
 
     if samples is None:
         samples = res.posterior_sample
@@ -4839,6 +4900,278 @@ def plot_random_samples_transit(res, ncurves=50, samples=None, over=0.1,
     if res.return_figs:
         return fig
 
+def plot_random_samples_astrometry(res, Np ,ncurves=50, samples=None, toplike=70, isolate_known_object=True,
+                                    include_jitters_in_points=False, full_plot=False, colormap='plasma', **kwargs):
+    print('Astrometry orbit plot depends on the subtraction of the paralactic motion, therefore the set of posterior samples shown will not be truly comparable to the data (which is shown with the maximum-likelihood paralactic solution removed)')
+    
+    from ..kepler import brandt_solver
+    from .analysis import reorder_P5_ast
+    reorder_P5_ast(res,replace = True)
+
+    def wss(da,dd,par,mua,mud,t,psi,pf,tref):
+        T = t - tref
+        return (da + mua*dty*T)*np.sin(psi) + (dd +mud*dty*T)*np.cos(psi) +par*pf
+    
+    def waccels(accela,acceld,jerka,jerkd,t,psi,tref):
+        T = t - tref
+        return ((1/2)*accela*dty2*T**2 + (1/6)*jerka*dty3*T**3)*np.sin(psi) + ((1/2)*acceld*dty2*T**2 + (1/6)*jerkd*dty3*T**3)*np.cos(psi)
+
+    def wk_orb_TI(P,Tper,e,A,B,F,G,t,psi):
+        X, Y = ellip_rectang(t, P, e, Tper)
+        return (B*X + G*Y)*np.sin(psi) + (A*X + F*Y)*np.cos(psi)
+    
+    def Thiele_Innes(a0, w, W, cosi):
+        A = a0*(np.cos(w)*np.cos(W) - np.sin(w)*np.sin(W)*cosi)
+        B = a0*(np.cos(w)*np.sin(W) + np.sin(w)*np.cos(W)*cosi)
+        F = -a0*(np.sin(w)*np.cos(W) + np.cos(w)*np.sin(W)*cosi)
+        G = -a0*(np.sin(w)*np.sin(W) - np.cos(w)*np.cos(W)*cosi)
+        return A, B, F, G
+
+    def ellip_rectang(t, P, e, Tper):
+        M = twopi * (t - Tper) / P
+        E = brandt_solver(M, e)
+        X = np.cos(E) - e
+        Y = np.sqrt(1-e**2) * np.sin(E)
+        return X, Y
+    
+    def ra_dec_orb_TI(P,Tper,e,A,B,F,G,t):
+        X, Y = ellip_rectang(t, P, e, Tper)
+        return B*X + G*Y, A*X + F*Y
+    
+    def wscanbias(A,theta,k,psi):
+        return A*np.cos(k*(psi-theta))
+
+    if toplike>100 or toplike<0:
+        print('When selecting what percentage of posterior to sample you must select a value 0 < toplike < 100\n Setting the value to 70%')
+        toplike = 70
+
+    t = np.array(res.GAIAdata.t)
+    t2 = t.copy()
+    wobs = np.array(res.GAIAdata.w)
+    ws_err = np.array(res.GAIAdata.wsig)
+    psi = np.array(res.GAIAdata.psi)
+    pf = np.array(res.GAIAdata.pf)
+    sample = res.maximum_likelihood_sample(Np=Np,printit=False)
+    if include_jitters_in_points:
+        ws_err = np.hypot(ws_err,sample[res.indices['jitter']][0])
+
+    alpha_errs = ws_err*np.sin(psi)
+    dec_errs = ws_err*np.cos(psi)
+
+    nplanets, params, keys = astrometry_phase_plot_logic(res,sample)
+
+    if nplanets == 0:
+        print('Cannot plot astrometric orbit samples for a set with no orbits, please chose a higher Np')
+        return
+
+    da, dd, mua, mud, par = sample[res.indices['astrometric_solution']]
+    if res.n_accel_params == 4:
+        accela, acceld, jerka, jerkd = sample[res.indices['accel_solution']]
+    elif res.n_accel_params == 2:
+        accela, acceld = sample[res.indices['accel_solution']]
+        jerka, jerkd = 0, 0
+    if res.scan_dep_signal:
+        scan_dep_signal_params = sample[res.indices['scan_dep_signal']]
+
+    # P, phi, e, a, w, cosi, W = sample[res.indices['planets']]
+
+    nrows = {
+        1: 1, 2: 1, 3: 1,
+        4: 2, 5: 2, 6: 2
+    }[nplanets]
+
+    ncols = {
+        1: 1, 2: 2, 3: 3,
+        4: 2, 5: 3, 6: 3
+    }[nplanets]
+
+    fs = [ncols*6,nrows*6]
+
+    fig = plt.figure(tight_layout=True, figsize=fs)
+
+    gs = gridspec.GridSpec(nrows, ncols, figure=fig)
+
+    if nplanets == 1:
+        axs = [fig.add_subplot(gs[0, 0])]
+    elif nplanets == 2:
+        axs = [fig.add_subplot(gs[0, 0]),fig.add_subplot(gs[0, 1])]
+    elif nplanets == 3:
+        axs = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[0, 2])]
+    elif nplanets == 4:
+        axs = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[1, 0]),
+                fig.add_subplot(gs[1, 1])]
+    elif nplanets == 5:
+        axs = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[0, 2]),
+                fig.add_subplot(gs[1, 0]), fig.add_subplot(gs[1, 1])]
+    elif nplanets == 6:
+        axs = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[0, 2]),
+                fig.add_subplot(gs[1, 0]), fig.add_subplot(gs[1, 1]), fig.add_subplot(gs[1, 2])]
+    else:
+        raise NotImplementedError
+
+    time_array = np.arange(np.min(t),np.max(t),1.0)
+    
+    wmodel = wss(da, dd, par, mua, mud, t, psi, pf, res.M0_epoch)
+    #add accelerations
+    if res.n_accel_params >0:
+        wmodel += waccels(accela, acceld, jerka, jerkd, t, psi, res.M0_epoch)
+    
+    #Get full model
+    for letter in keys:
+        # P, phi, e, a, w, cosi, W, Tper, type, index = params[letter]
+        P = params[letter]['P']
+        phi = params[letter]['φ']
+        e = params[letter]['e']
+        if res.thiele_innes:
+            A = params[letter]['A']
+            B = params[letter]['B']
+            F = params[letter]['F']
+            G = params[letter]['G']
+        else:
+            a = params[letter]['a']
+            w = params[letter]['w']
+            cosi = params[letter]['cosi']
+            W = params[letter]['W']
+            A,B,F,G = Thiele_Innes(a,w,W,cosi)
+        Tper = params[letter]['Tp']
+
+        wmodel += wk_orb_TI(P, Tper, e, A, B, F, G, t, psi)
+    
+    #add scan-angle bias signal
+    if res.scan_dep_signal:
+        for j in range(res.n_scan_dep_comps):
+            Ak = scan_dep_signal_params[j]
+            thetak = scan_dep_signal_params[j+res.n_scan_dep_comps]
+            k = 2*j + 3
+            wmodel += wscanbias(Ak,thetak,k,psi)
+
+    #get residuals
+    wws = wobs - wmodel
+    alpha_res, dec_res = wws * np.sin(psi), wws * np.cos(psi)
+    for j,letter in enumerate(keys):
+        P = params[letter]['P']
+        phi = params[letter]['φ']
+        e = params[letter]['e']
+        if res.thiele_innes:
+            A = params[letter]['A']
+            B = params[letter]['B']
+            F = params[letter]['F']
+            G = params[letter]['G']
+        else:
+            a = params[letter]['a']
+            w = params[letter]['w']
+            cosi = params[letter]['cosi']
+            W = params[letter]['W']
+            A,B,F,G = Thiele_Innes(a,w,W,cosi) 
+        Tper = params[letter]['Tp']  
+        
+        ra, dec = ra_dec_orb_TI(P, Tper, e, A, B, F, G, t)
+        ra2, dec2 = ra_dec_orb_TI(P, Tper, e, A, B, F, G, time_array)
+
+        ax = axs[j]
+
+        # ax.scatter(ra, dec, marker='o', c=t, cmap='plasma')
+        ax.plot(ra2, dec2, color='cornflowerblue', lw=3, zorder=-1)
+        ax.scatter(ra + alpha_res, dec + dec_res, c=t, cmap=colormap, alpha=1)
+        cmap = matplotlib.colormaps[colormap]
+        for i in range(len(t)):
+            colour = cmap((t[i]-t[0])/(t[len(t)-1]-t[0]))
+            ax.plot([ra[i]+alpha_res[i]-alpha_errs[i],ra[i]+alpha_res[i]+alpha_errs[i]],[dec[i]+dec_res[i]-dec_errs[i],dec[i]+dec_res[i]+dec_errs[i]],c=colour,alpha=0.6)
+
+        #Add line connecting COM to pericentre
+        ra_per, dec_per = ra_dec_orb_TI(P, Tper, e, A, B, F, G, Tper)
+        ax.scatter(0,0,marker='x',c='grey')
+        ax.plot([0,ra_per],[0,dec_per],c='grey',ls=':')
+
+    if samples is None:
+        samples = res.posterior_sample.copy()
+        samples_provided = False
+    else:
+        samples = np.atleast_2d(samples)
+        samples_provided = True
+
+    if Np==None:
+        mask = np.ones(samples.shape[0], dtype=bool)
+    else:
+        mask = samples[:,res.indices['np']]==Np
+
+    if samples.shape[0] == 1:
+        ii = np.zeros(1, dtype=int)
+    elif ncurves == samples.shape[0] or samples_provided:
+        # ii = np.arange(ncurves)
+        ii = np.random.choice(np.arange(samples.shape[0]), size=ncurves, replace=False)
+    else:
+        try:
+            # select `ncurves` indices from the 70% highest likelihood samples
+            lnlike = res.posterior_lnlike[:, 1]
+            sorted_lnlike = np.sort(lnlike)[::-1]
+            mask_lnlike = lnlike > np.percentile(sorted_lnlike, toplike)
+            ii = np.random.choice(np.where(mask & mask_lnlike)[0], size=ncurves,
+                                    replace=False)
+        except ValueError:
+            try:
+                ii = np.random.choice(np.where(mask)[0], size=ncurves,
+                                    replace=False)
+            except ValueError:
+                print('ncurves is larger than the number of posterior samples with Np = '+str(Np)+'\nUsing all the available posteriors with the correct number of Keplerians...')
+                ii = np.where(mask)[0]
+                # ii = np.random.choice(np.arange(samples.shape[0]), size=ncurves, replace=False)
+
+    transparency = max(0.02,1/len(ii))
+    for i in ii:
+        sample = samples[i]
+        nplanets, params, keys = astrometry_phase_plot_logic(res,sample)
+
+        for j,letter in enumerate(keys):
+            P = params[letter]['P']
+            phi = params[letter]['φ']
+            e = params[letter]['e']
+            if res.thiele_innes:
+                A = params[letter]['A']
+                B = params[letter]['B']
+                F = params[letter]['F']
+                G = params[letter]['G']
+            else:
+                a = params[letter]['a']
+                w = params[letter]['w']
+                cosi = params[letter]['cosi']
+                W = params[letter]['W']
+                A,B,F,G = Thiele_Innes(a,w,W,cosi) 
+            Tper = params[letter]['Tp']  
+            
+
+            ra2, dec2 = ra_dec_orb_TI(P, Tper, e, A, B, F, G, time_array)
+
+            ax = axs[j]
+
+            ax.plot(ra2, dec2, color='k', lw=2, alpha = transparency, zorder=-2)
+    
+    for j in range(nplanets):
+        ax = axs[j]
+        #Make plot square to get good visual on e and inc
+        lowx,highx = ax.get_xlim()
+        lowy,highy = ax.get_ylim()
+        xwidth = highx - lowx
+        ywidth = highy - lowy
+        if xwidth < ywidth:
+            delta = ywidth - xwidth
+            ax.set(xlim = [lowx - delta/2,highx + delta/2])
+        else:
+            delta = xwidth - ywidth
+            ax.set(ylim = [lowy - delta/2,highy + delta/2])
+        ax.xaxis.set_inverted(True)
+
+        ax.set_box_aspect(1)
+        ax.set(xlabel=r'$\Delta \alpha\,\cos\delta$ [mas]', ylabel=r'$\Delta \delta$ [mas]',title='Photocentre Orbit '+str(j+1))
+    
+    if res.save_plots:
+        filename = 'kima-showresults-fig6.png'
+        print('saving in', filename)
+        fig.savefig(filename)
+
+    if res.return_figs:
+        return fig
+
 
 def orbit(res, sample=None, n=10, star_mass=1.0, sortP=False):
     from analysis import get_planet_mass
@@ -5158,6 +5491,21 @@ def report(res, hexbin=False, diagnostic=False, **kwargs):
     if res.studentt:
         axs['t'].text(0, y, 'student-t: True'); y -= 1
     axs['t'].set(ylim=(y-1, 1))
+
+    if diagnostic:
+        from .classic import plot_diagnostic_1, plot_diagnostic_2
+        plot_diagnostic_1(res.sample_info, ax=axs['d1'])
+        axs['d1'].set(title='')
+        xticks = np.linspace(0, res.sample.shape[0], 5)
+        xticklabels = [str(int(x)) + 'k' if x > 0 else '0' for x in xticks / 1000]
+        axs['d1'].set(xticks=xticks, xticklabels=xticklabels)
+
+        plot_diagnostic_2(res.levels, ax=(axs['d2'], axs['d3']))
+        axs['d2'].set(title='')
+        axs['d3'].set(title='')
+
+        axs['d4'].axis('off')
+
 
     return fig, axs
 
