@@ -38,6 +38,9 @@ class KIMA_API BINARIESmodel
     
         /// use a Student-t distribution for the likelihood (instead of Gaussian)
         bool studentt {false};
+
+        /// whether to print parameters indexing at 0 or 1
+        int index_from {1};
     
         /// include (better) known extra Keplerian curve(s)? (KO mode!)
         bool known_object {true};
@@ -56,6 +59,7 @@ class KIMA_API BINARIESmodel
         ///whether to perform the GR and tidal corrections (Tidal in particular is computationally expensive)
         bool relativistic_correction = false;
         bool tidal_correction = false;
+        double correction_K_precision = 50;
         
         ///Is the binary a double lined binary with RV data on both stars
         bool double_lined = false;

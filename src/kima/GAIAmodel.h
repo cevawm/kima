@@ -25,16 +25,14 @@ class KIMA_API GAIAmodel
     protected:
         /// use a Student-t distribution for the likelihood (instead of Gaussian)
         bool studentt {false};
+
+        /// whether to print parameters indexing at 0 or 1
+        int index_from {1};
         
         /// Fix the number of planets? (by default, yes)
         bool fix {true};
         /// Maximum number of planets (by default 1)
         int npmax {1};
-    
-        /// include (better) known extra Keplerian curve(s)? (KO mode!)
-        ///bool known_object {false};
-        /// how many known objects
-        ///int n_known_object {0};
         
         ///Whether to use thiele_innes parametrisation
         bool thiele_innes {false};
@@ -59,19 +57,29 @@ class KIMA_API GAIAmodel
         double mua;
         double mud;
         double plx;
+
+        // Parameters for accelerations if using
+        double accela;
+        double acceld;
+        double jerka;
+        double jerkd;
         
         double nu;
         double jitter;
 
+        // Parameters of the scan-angle bias modelling if set
+        std::vector<double> Ak;
+        std::vector<double> thetak;
+
         // Parameters for the known object, if set. Use geometric parameters rather than thiele_innes
         // double KO_P, KO_K, KO_e, KO_phi, KO_w;
         std::vector<double> KO_P;
-        std::vector<double> KO_a0;
+        std::vector<double> KO_a;
         std::vector<double> KO_e;
         std::vector<double> KO_phi;
-        std::vector<double> KO_omega;
+        std::vector<double> KO_w;
         std::vector<double> KO_cosi;
-        std::vector<double> KO_Omega;
+        std::vector<double> KO_W;
 
         // The signal
         std::vector<double> mu;// = the astrometric model
@@ -99,6 +107,31 @@ class KIMA_API GAIAmodel
         distribution Jprior;
         /// prior for student-t degree of freedom
         distribution nu_prior;
+
+        ///Whether to include a model of the scan-angle dependent signal from a close binary (see Holl et al. 2023)
+        bool scan_dep_signal {false};
+        bool get_scan_dep_signal() { return scan_dep_signal; }
+        ///number of components of the scan-angle dependent signal model up to 3?
+        size_t n_scan_dep_components {0};
+        size_t get_n_scan_dep_components() { return n_scan_dep_components; }
+        /// set the number of components
+        void set_scan_dep_signal(size_t n_scan_dep_components);
+
+
+        std::vector<distribution> Ak_prior;
+        std::vector<distribution> thetak_prior;
+
+        ///Whether to use an acceleration solution (i.e. 7-parameter or 9-parameter rather than the default 5-parameter solution)
+        bool acceleration {false};
+        bool jerk {false};
+        size_t n_baseline_params {5};
+        size_t get_n_baseline_params() { return n_baseline_params; }
+        void set_baseline_model(size_t n_baseline_params);
+        
+        distribution accela_prior;
+        distribution acceld_prior;
+        distribution jerka_prior;
+        distribution jerkd_prior;
         
         //priors for astrometric solution
         distribution da_prior;
@@ -117,19 +150,12 @@ class KIMA_API GAIAmodel
         void set_known_object(size_t known_object);
         // priors for KO mode!
         std::vector<distribution> KO_Pprior;
-        std::vector<distribution> KO_a0prior;
+        std::vector<distribution> KO_aprior;
         std::vector<distribution> KO_eprior;
         std::vector<distribution> KO_phiprior;
-        std::vector<distribution> KO_omegaprior;
+        std::vector<distribution> KO_wprior;
         std::vector<distribution> KO_cosiprior;
-        std::vector<distribution> KO_Omegaprior;
-//         distribution KO_a0prior {(size_t) n_known_object};
-//         distribution KO_eprior {(size_t) n_known_object};
-//         distribution KO_phiprior {(size_t) n_known_object};
-//         distribution KO_omegaprior {(size_t) n_known_object};
-//         distribution KO_cosiprior {(size_t) n_known_object};
-//         distribution KO_Omegaprior {(size_t) n_known_object};
-        
+        std::vector<distribution> KO_Wprior;        
         
 
         GAIAConditionalPrior* get_conditional_prior() {

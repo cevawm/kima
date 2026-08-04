@@ -36,13 +36,13 @@ def GAIA_free(run=False, load=False, **kwargs):
 
     model.conditional.eprior = Kumaraswamy(0.867, 3.03)
     model.conditional.Pprior = LogUniform(100.0, 10000.0)
-    model.conditional.a0prior = ModifiedLogUniform(0.1, 100.0)
+    model.conditional.aprior = ModifiedLogUniform(0.1, 100.0)
     model.conditional.cosiprior = Uniform(-1, 1)
 
     model.da_prior = Gaussian(4.2, 0.4)
     model.dd_prior = Gaussian(2.4, 0.3)
-    model.mua_prior = Gaussian(-0.08, 0.2)
-    model.mud_prior = Gaussian(-0.42, 0.2)
+    model.mua_prior = Gaussian(-30, 80)
+    model.mud_prior = Gaussian(150, 80)
     model.parallax_prior = Uniform(1.3, 1.9)
 
     model.star_mass = 1.2

@@ -453,7 +453,7 @@ void BINARIESmodel::remove_known_object()
         else{
             bin_phi = KO_phi[j];
         }
-        auto v = postKep::keplerian_prec(data.t, P_anom, KO_K[j], KO_e[j], KO_w[j], KO_wdot[j], bin_phi, data.M0_epoch, KO_cosi[j], star_mass, binary_mass, star_radius, relativistic_correction, tidal_correction);
+        auto v = postKep::keplerian_prec(data.t, P_anom, KO_K[j], KO_e[j], KO_w[j], KO_wdot[j], bin_phi, data.M0_epoch, KO_cosi[j], star_mass, binary_mass, star_radius, relativistic_correction, tidal_correction, correction_K_precision);
         for (size_t i = 0; i < data.t.size(); i++)
         {
             mu[i] -= v[i];
@@ -498,7 +498,7 @@ void BINARIESmodel::add_known_object()
         else{
             bin_phi = KO_phi[j];
         }
-        auto v = postKep::keplerian_prec(data.t, P_anom, KO_K[j], KO_e[j], KO_w[j], KO_wdot[j], bin_phi, data.M0_epoch, KO_cosi[j], star_mass,binary_mass,star_radius,relativistic_correction,tidal_correction);
+        auto v = postKep::keplerian_prec(data.t, P_anom, KO_K[j], KO_e[j], KO_w[j], KO_wdot[j], bin_phi, data.M0_epoch, KO_cosi[j], star_mass,binary_mass,star_radius,relativistic_correction,tidal_correction,correction_K_precision);
         for(size_t i=0; i<data.t.size(); i++)
         {
             mu[i] += v[i];
@@ -998,27 +998,27 @@ string BINARIESmodel::description() const
             desc += "beta" + std::to_string(j+1) + sep;
         }
     }
+    
+    auto printi = [&](const size_t n, const string& name )
+    {
+        for(size_t i = 0; i < n; i++) 
+        {
+            desc += name + std::to_string(i + index_from) + sep;
+        }
+    };
 
     if(known_object) { // KO mode!
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_P" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_K" + std::to_string(i) + sep;
+        printi(n_known_object, "KO_P");
+        printi(n_known_object, "KO_K");
         if (double_lined)
         {
-            for(int i=0; i<n_known_object; i++) 
-                desc += "KO_q" + std::to_string(i) + sep;
+            printi(n_known_object, "KO_q");
         }
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_phi" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_ecc" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_w" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_wdot" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_cosi" + std::to_string(i) + sep;
+        printi(n_known_object, "KO_phi");
+        printi(n_known_object, "KO_ecc");
+        printi(n_known_object, "KO_w");
+        printi(n_known_object, "KO_wdot");
+        printi(n_known_object, "KO_cosi");
     }
 
     desc += "ndim" + sep + "maxNp" + sep;
@@ -1027,11 +1027,11 @@ string BINARIESmodel::description() const
 
     int maxpl = planets.get_max_num_components();
     if (maxpl > 0) {
-        for(int i = 0; i < maxpl; i++) desc += "P" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "K" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "phi" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "ecc" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "w" + std::to_string(i) + sep;
+        printi(maxpl, "P");
+        printi(maxpl, "K");
+        printi(maxpl, "phi");
+        printi(maxpl, "ecc");
+        printi(maxpl, "w");
     }
 
     desc += "staleness" + sep;
@@ -1050,7 +1050,8 @@ string BINARIESmodel::description() const
 */
 void BINARIESmodel::save_setup() {
     std::fstream fout("kima_model_setup.txt", std::ios::out);
-    fout << std::boolalpha;
+    fout << std::boolalpha << std::fixed;
+    fout.precision(15);
 
     fout << "; " << timestamp() << endl << endl;
 
@@ -1085,9 +1086,7 @@ void BINARIESmodel::save_setup() {
         fout << f << ",";
     fout << endl;
 
-    fout.precision(15);
     fout << "M0_epoch: " << data.M0_epoch << endl;
-    fout.precision(6);
 
     fout << endl;
 
@@ -1160,6 +1159,7 @@ class BINARIESmodel_publicist : public BINARIESmodel
         using BINARIESmodel::trend;
         using BINARIESmodel::degree;
         using BINARIESmodel::studentt;
+        using BINARIESmodel::index_from;
         using BINARIESmodel::known_object;
         using BINARIESmodel::n_known_object;
         using BINARIESmodel::star_mass;
@@ -1168,6 +1168,7 @@ class BINARIESmodel_publicist : public BINARIESmodel
         using BINARIESmodel::binary_radius;
         using BINARIESmodel::enforce_stability;
         using BINARIESmodel::relativistic_correction;
+        using BINARIESmodel::correction_K_precision;
         using BINARIESmodel::tidal_correction;
         using BINARIESmodel::double_lined;
         using BINARIESmodel::eclipsing;
@@ -1198,6 +1199,9 @@ NB_MODULE(BINARIESmodel, m) {
         .def_rw("studentt", &BINARIESmodel_publicist::studentt,
                 "use a Student-t distribution for the likelihood (instead of Gaussian)")
         //
+        .def_rw("index_from", &BINARIESmodel_publicist::index_from,
+                "what indexing convention to use for the labelling of keplerians, defaults to 1.")
+        //
         .def_rw("known_object", &BINARIESmodel_publicist::known_object,
                 "whether to include (better) known extra Keplerian curve(s), should be true for BINARIESmodel")
         .def_rw("n_known_object", &BINARIESmodel_publicist::n_known_object,
@@ -1220,6 +1224,8 @@ NB_MODULE(BINARIESmodel, m) {
                 "whether to perform the GR correction")
         .def_rw("tidal_correction", &BINARIESmodel_publicist::tidal_correction,
                 "whether to perform the tidal correction")
+        .def_rw("correction_K_precision", &BINARIESmodel_publicist::correction_K_precision,
+                "To what precision K2 is calculated for the relativistic and tidal corrections, (default is 50 m/s and unless the orbit is very close to face-on this gives sub cm/s precision on the corrections), increasing this may speed up the sampling")
                 
         //
         .def_rw("double_lined", &BINARIESmodel_publicist::double_lined,

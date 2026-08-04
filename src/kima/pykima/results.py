@@ -17,7 +17,7 @@ from copy import copy, deepcopy
 
 
 from .. import __models__, MODELS
-from ..kepler import keplerian
+from ..kepler import keplerian, keplerian_etv
 from ..postkepler import post_keplerian, post_keplerian_sb2, period_correction, a0fromK, Kfroma0
 from kima import distributions
 from .classic import postprocess
@@ -166,7 +166,7 @@ class astrometric_data_holder:
     Attributes:
         t (ndarray): The observation times
         w (ndarray): 
-        sigw (ndarray): 
+        wsig (ndarray): 
         psi (ndarray): 
         pf (ndarray): 
         N (int): Total number of observations
@@ -174,14 +174,14 @@ class astrometric_data_holder:
 
     t: np.ndarray = field(init=False)
     w: np.ndarray = field(init=False)
-    sigw: np.ndarray = field(init=False)
+    wsig: np.ndarray = field(init=False)
     psi: np.ndarray = field(init=False)
     pf: np.ndarray = field(init=False)
     N: int = field(init=False)
     instrument: str = 'Gaia'
 
     def __repr__(self):
-        return f"data_holder(N={self.N}, t, w, sigw, psi, pf)"
+        return f"data_holder(N={self.N}, t, w, wsig, psi, pf)"
 
 
 @dataclass
@@ -195,7 +195,12 @@ class ETV_data_holder:
         N (int): Total number of observations
     """
 
-    epoch: np.ndarray = field(init=False)
+    t: np.ndarray = field(init=False) #hack to stop breaks
+    y: np.ndarray = field(init=False) #These give the same names as other datas
+    e: np.ndarray = field(init=False) #These give the same names as other datas
+
+    obs: np.ndarray = field(init=False) #hack as well, in future could have different instruments in ETVmodel
+    epochs: np.ndarray = field(init=False)
     et: np.ndarray = field(init=False)
     etsig: np.ndarray = field(init=False)
     N: int = field(init=False)
@@ -295,7 +300,7 @@ class posterior_holder:
             raise ValueError(f'`units` must be one of {allowed}')
         units = units or 'mjup'
         if GAIA:
-            m = get_planet_mass_GAIA(self.P, self.a0, self.plx, star_mass, full_output=True)[-1]
+            m = get_planet_mass_GAIA(self.P, self.a, self.plx, star_mass, full_output=True)[-1]
         else:
             m = get_planet_mass(self.P, self.K, self.e, star_mass, full_output=True)[-1]
         if units.lower() in ('me', 'mearth', 'earth'):
@@ -306,10 +311,10 @@ class posterior_holder:
         """ planet semi-major axis [AU] """
         if GAIA:
             try:
-                return self.a0/self.plx
+                return self.a/self.plx
             except ValueError:
                 plx_new = self.plx[:, np.newaxis].copy()
-                return self.a0/plx_new
+                return self.a/plx_new
         else:
             return get_planet_semimajor_axis(self.P, self.K, star_mass,
                                          full_output=True)[-1]
@@ -576,10 +581,14 @@ class KimaResults:
                 data = model.data
             self.ETVdata = ETV_data_holder()
             self.data = self.ETVdata
-            self.ETVdata.epochs = np.copy(data.t)
-            self.ETVdata.et = np.copy(data.w)
-            self.ETVdata.etsig = np.copy(data.wsig)
+            self.ETVdata.epochs = np.copy(data.epochs)
+            self.ETVdata.t = np.copy(data.et) #Hack to not have breaks
+            self.ETVdata.et = np.copy(data.et)
+            self.ETVdata.y = np.copy(data.et)
+            self.ETVdata.etsig = np.copy(data.etsig)
+            self.ETVdata.e = np.copy(data.etsig)
             self.ETVdata.N = data.N
+            self.ETVdata.obs = np.copy(data.obsi)
             self.data_type = "ETV"
         elif self.model is MODELS.RVGAIAmodel:
             if data is None:
@@ -628,6 +637,7 @@ class KimaResults:
             self.double_lined = model.double_lined
             self.eclipsing = model.eclipsing
             self.relativistic_correction = model.relativistic_correction
+            self.correction_K_precision = model.correction_K_precision
             self.tidal_correction = model.tidal_correction
             self.star_mass = model.star_mass
             self.binary_mass = model.binary_mass
@@ -641,10 +651,16 @@ class KimaResults:
             self.thiele_innes = model.thiele_innes
             self.RA = model.RA
             self.DEC= model.DEC
+            self.n_baseline_params = model.n_baseline_params
+            self.scan_dep_signal = model.scan_dep_signal
+            self.n_scan_dep_comps = model.n_scan_dep_components
         if self.model is MODELS.RVGAIAmodel:
             self.thiele_innes = False
             self.RA = model.RA
             self.DEC= model.DEC
+            self.n_baseline_params = model.n_baseline_params
+            self.scan_dep_signal = model.scan_dep_signal
+            self.n_scan_dep_comps = model.n_scan_dep_components
         if self.model is MODELS.RVFWHMmodel:
             self.series = ('RV', 'FWHM')
             self.data.y2, self.data.e2, *_ = np.array(data.actind)
@@ -655,6 +671,9 @@ class KimaResults:
 
         if self.model is MODELS.SPLEAFmodel:
             self.nseries = int(setup['kima']['nseries'])
+
+        if self.model is MODELS.ETVmodel:
+            self.ephemeris = model.ephemeris
 
         if self.data_type=='RV':
             self._extra_data = np.array(np.copy(data.actind))
@@ -816,6 +835,22 @@ class KimaResults:
         #read astrometric solution
         if self.model in (MODELS.GAIAmodel, MODELS.RVGAIAmodel):
             self._read_astrometric_solution()
+            if self.scan_dep_signal:
+                self._read_scan_dep_signal()
+
+        #if ETV read reference time and ephemerides
+        if self.model is MODELS.ETVmodel:
+            self.indices['ref_time'] = self._current_column
+            self._current_column += 1
+            self.indices['ephem1'] = self._current_column
+            self._current_column += 1
+            if self.ephemeris >=2:
+                self.indices['ephem2'] = self._current_column
+                self._current_column += 1
+            if self.ephemeris >=3:
+                self.indices['ephem3'] = self._current_column
+                self._current_column += 1
+
         
         # find KO in the compiled model
         self.KO = model.known_object
@@ -908,14 +943,33 @@ class KimaResults:
 
     def _read_astrometric_solution(self):
         self.n_astrometric_solution = 5
+        self.n_accel_params = self.n_baseline_params - self.n_astrometric_solution
         i1, i2 = self._current_column, self._current_column + self.n_astrometric_solution
         self.astrometric_solution = self.posterior_sample[:, i1:i2]
         self._current_column += self.n_astrometric_solution
         self.indices['astrometric_solution_start'] = i1
         self.indices['astrometric_solution_end'] = i2
         self.indices['astrometric_solution'] = slice(i1, i2)
+        if self.n_accel_params>0:
+            i1, i2 = self._current_column, self._current_column + self.n_accel_params
+            self.accel_solution = self.posterior_sample[:, i1:i2]
+            self._current_column += self.n_accel_params
+            self.indices['accel_solution_start'] = i1
+            self.indices['accel_solution_end'] = i2
+            self.indices['accel_solution'] = slice(i1, i2)
         if self._debug:
             print('finished reading astrometric solution')
+    
+    def _read_scan_dep_signal(self):
+        i1, i2 = self._current_column, self._current_column + self.n_scan_dep_comps*2
+        self.scan_dep_signal_params = self.posterior_sample[:, i1:i2]
+        self._current_column += self.n_scan_dep_comps*2
+        self.indices['scan_dep_signal_start'] = i1
+        self.indices['scan_dep_signal_end'] = i2
+        self.indices['scan_dep_signal'] = slice(i1, i2)
+        if self._debug:
+            print('finished reading scan-angle dependent signal')
+
 
     def _read_limb_dark(self):
         return
@@ -1053,7 +1107,7 @@ class KimaResults:
                     self.indices[f'planets.{p}'] = slice(istart, iend)
                     istart += self.max_components
             else:
-                for j, p in zip(range(self.n_dimensions), ('P', 'φ', 'e', 'a0', 'w', 'cosi', 'W')):
+                for j, p in zip(range(self.n_dimensions), ('P', 'φ', 'e', 'a', 'w', 'cosi', 'W')):
                     iend = istart + self.max_components
                     self.indices[f'planets.{p}'] = slice(istart, iend)
                     istart += self.max_components
@@ -1476,7 +1530,7 @@ class KimaResults:
         return parameter_priors
 
     @classmethod
-    def load(cls, filename: str = None, diagnostic: bool = False, **kwargs):
+    def load(cls, filename: str = None, zipped_folder: bool = True, **kwargs):
         """
         Load a KimaResults object from the current directory, a pickle file, or
         a zip file.
@@ -1485,8 +1539,9 @@ class KimaResults:
             filename (str, optional):
                 If given, load the model from this file. Can be a zip or pickle
                 file. Defaults to None.
-            diagnostic (bool, optional):
-                Whether to plot the DNest4 diagnotics. Defaults to False.
+            zipped_folder (bool, optional):
+                Whether `filename` is a zipped results folder (instead of a
+                zipped pickle file). Defaults to True.
             **kwargs: Extra keyword arguments passed to `showresults`
 
         Returns:
@@ -1494,20 +1549,24 @@ class KimaResults:
         """
         if filename is None:
             from .showresults import showresults
+
             return showresults(force_return=True, **kwargs)
 
         try:
-            if filename.endswith('.zip'):
+            if filename.endswith('.zip') and zipped_folder:
                 zf = zipfile.ZipFile(filename, 'r')
                 names = zf.namelist()
-                needs = ('sample.txt', 'levels.txt', 'sample_info.txt',
-                         'kima_model_setup.txt')
+                needs = (
+                    'sample.txt',
+                    'levels.txt',
+                    'sample_info.txt',
+                    'kima_model_setup.txt',
+                )
                 wants = ('posterior_sample.txt', 'posterior_sample_info.txt')
 
                 for need in needs:
                     if need not in names:
-                        raise ValueError('%s does not contain a "%s" file' %
-                                         (filename, need))
+                        raise ValueError('%s does not contain a "%s" file' % (filename, need))
 
                 with tempfile.TemporaryDirectory() as dirpath:
                     for need in needs:
@@ -1558,6 +1617,7 @@ class KimaResults:
 
             elif filename.endswith('.pkl'):
                 import pickle
+
                 try:
                     with open(filename, 'rb') as f:
                         res = pickle.load(f)
@@ -1569,11 +1629,10 @@ class KimaResults:
                 try:
                     import compress_pickle as pickle
                 except (ImportError, ModuleNotFoundError):
-                    print('reading compressed file requires the `compress-pickle` package')
-                    return
-                
-                res = pickle.load(filename)
+                    msg = "reading compressed file requires the `compress-pickle` package"
+                    raise ModuleNotFoundError(msg)
 
+                res = pickle.load(filename)
 
         except Exception:
             # print('Unable to load data from ', filename, ':', e)
@@ -1639,6 +1698,101 @@ class KimaResults:
         if add_timestamp:
             id += get_timestamp()
         return id
+    
+    def to_parquet(self, directory=None, save_prior_samples=False, N=int(1e6)):
+        """ Save the results in parquet format.
+        
+        Args:
+            directory (str, optional): 
+                The directory where to save the files. If not given, a unique
+                name will be generated from the properties of the model.
+            save_prior_samples (bool, optional):
+                Whether to save random samples from the P,K,e priors (useful for
+                occurrence rate calculations). Defaults to False.
+            N (int, optional):
+                Number of prior samples to save if `save_prior_samples` is True.
+        
+        Returns:
+            This method does not return anything, but saves parquet files in the
+            specified directory: 
+            - `sample.parquet`: 
+              merged contents of `sample.txt` and `sample_info.txt` files
+            - `posterior_sample.parquet`: 
+              merged contents of `posterior_sample.txt` and
+              `posterior_sample_info.txt` files
+            - `levels.parquet`:
+              contents of `levels.txt` file
+            - `prior.parquet` (if `save_prior_samples`): 
+              contains random samples from the P, K, e priors
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            raise ImportError("pandas is required to save parquet files")
+
+        # columns on _info arrays
+        info_cols = ["level assignment", "log likelihood", "tiebreaker", "ID"]
+        # total number of parameters (columns)
+        npars = len(self._parameters)
+        # build indices dict with lists of integers instead of slices
+        indices = {
+            k: list(range(*v.indices(npars))) if isinstance(v, slice) else v
+            for k, v in self.indices.items()
+        }
+
+        sample = pd.DataFrame(self.sample, columns=self._parameters).join(
+            pd.DataFrame(self.sample_info, columns=info_cols)
+        )
+        sample.attrs['indices'] = indices
+
+        posterior_sample = pd.DataFrame(self.posterior_sample, columns=self._parameters).join(
+            pd.DataFrame(self.posterior_lnlike[:, :4], columns=info_cols)
+        )
+        posterior_sample.attrs['indices'] = indices
+
+        levels_cols = ['log_X', 'log_likelihood', 'tiebreaker', 'accepts', 'tries', 'exceeds', 'visits']
+        levels = pd.DataFrame(self.levels, columns=levels_cols)
+
+        if directory is None:
+            directory = self.get_model_id()
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        file1 = os.path.join(directory, 'sample.parquet')
+        sample.to_parquet(file1, compression='zstd')
+
+        file2 = os.path.join(directory, 'posterior_sample.parquet')
+        posterior_sample.to_parquet(file2, compression='zstd')
+
+        file3 = os.path.join(directory, 'levels.parquet')
+        levels.to_parquet(file3, compression='zstd')
+
+        if save_prior_samples:
+            from numpy.random import default_rng
+            rng = default_rng()
+            u = np.empty((3, N))
+            rng.random(u.shape, out=u)
+            u[0] = np.vectorize(self.priors['Pprior'].ppf)(u[0])
+            u[1] = np.vectorize(self.priors['Kprior'].ppf)(u[1])
+            u[2] = np.vectorize(self.priors['eprior'].ppf)(u[2])
+            prior_samples = pd.DataFrame(u.T, columns=('P', 'K', 'e'))
+            prior_samples.attrs['npmax'] = self.npmax
+            prior_samples.attrs['Pprior'] = str(self.priors['Pprior'])
+            prior_samples.attrs['Kprior'] = str(self.priors['Kprior'])
+            prior_samples.attrs['eprior'] = str(self.priors['eprior'])
+            prior_samples.attrs['N'] = N
+            file4 = os.path.join(directory, 'prior.parquet')
+            prior_samples.to_parquet(file4, compression='zstd')
+
+    
+    def to_npz(self, filename='res.npz'):
+        np.savez_compressed(
+            filename, 
+            sample=self.sample, sample_info=self.sample_info, levels=self.levels, 
+            posterior_sample=self.posterior_sample
+        )
+        print('Wrote to', filename)
+
     def save_pickle(self, filename: str = None, directory: str = None,
                     postfix: str = None, compress: Union[bool, str] = False,
                     verbose: bool = True, **kwargs):
@@ -1690,14 +1844,15 @@ class KimaResults:
                 elif isinstance(compress, str):
                     available = list(filter(None, pickle.compressers.registry.get_known_compressions()))
                     if compress not in available:
-                        print('available compression methods: ', available)
-                        return
+                        raise ValueError(f'available compression methods: {available}')
+
                     dump_kwargs['compression'] = compress
                     ending = ending + COMPRESSED_FILE_EXT[compress]
 
             except (ImportError, ModuleNotFoundError):
-                print('compression requires the `compress-pickle` package')
-                return
+                msg = 'Compression requires the `compress-pickle` package. '
+                msg += 'Install with pip install "compress-pickle[lz4]"'
+                raise ModuleNotFoundError(msg)
 
         if filename is None:
             filename = self.get_model_id(add_timestamp=True)
@@ -1813,6 +1968,27 @@ class KimaResults:
             self.posteriors.mua = mua
             self.posteriors.mud = mud
             self.posteriors.plx = plx
+            if self.n_accel_params==4:
+                accela,acceld,jerka,jerkd = self.posterior_sample[:, self.indices['accel_solution']].T
+                self.posteriors.accela = accela
+                self.posteriors.acceld = acceld
+                self.posteriors.jerka = jerka
+                self.posteriors.jerkd = jerkd
+            elif self.n_accel_params==2:
+                accela,acceld = self.posterior_sample[:, self.indices['accel_solution']].T
+                self.posteriors.accela = accela
+                self.posteriors.acceld = acceld
+            if self.scan_dep_signal:
+                scan_dep_signal_params = self.posterior_sample[:,self.indices['scan_dep_signal']].T
+                if self.n_scan_dep_comps == 3:
+                    self.posteriors.Ak = scan_dep_signal_params[[0,1,2]]
+                    self.posteriors.thetak = scan_dep_signal_params[[3,4,5]]
+                elif self.n_scan_dep_comps == 2:
+                    self.posteriors.Ak = scan_dep_signal_params[[0,1]]
+                    self.posteriors.thetak = scan_dep_signal_params[[2,3]]
+                elif self.n_scan_dep_comps == 1:
+                    self.posteriors.Ak = scan_dep_signal_params[0]
+                    self.posteriors.thetak = scan_dep_signal_params[1]
             # TODO: _priors
 
         # instrument offsets
@@ -1820,7 +1996,7 @@ class KimaResults:
             self.posteriors.offset = self.posterior_sample[:, self.indices['inst_offsets']]
             # TODO: _priors
         
-        if self.model != MODELS.GAIAmodel:
+        if self.model != MODELS.GAIAmodel and self.model != MODELS.ETVmodel:
             # systemic velocity
             self.posteriors.vsys = self.posterior_sample[:, self.indices['vsys']].reshape(-1, 1)
             if self.model is MODELS.BINARIESmodel and self.double_lined:
@@ -1829,6 +2005,14 @@ class KimaResults:
             if self.model is MODELS.RVFWHMmodel:
                 self.posteriors.cfwhm = self.posterior_sample[:, self.indices['cfwhm']]
                 self._priors.cfwhm = self.priors['Cfwhm_prior']
+
+        if self.model is MODELS.ETVmodel:
+            self.posteriors.ref_time = self.posterior_sample[:,self.indices['ref_time']].reshape(-1, 1)
+            self.posteriors.ephem1 = self.posterior_sample[:,self.indices['ephem1']]
+            if self.ephemeris >= 2:
+                self.posteriors.ephem2 = self.posterior_sample[:,self.indices['ephem2']]
+            if self.ephemeris >= 3:
+                self.posteriors.ephem3 = self.posterior_sample[:,self.indices['ephem3']]
 
         if self.data_type=='RV' and self.trend:
             ind = self.indices['trend']
@@ -1905,17 +2089,25 @@ class KimaResults:
                     s = self.indices['planets.G']
                     self.posteriors.G = self.posterior_sample[:,s]
                     self._priors.G = self.priors['Gprior']
+
+                    def Campbell_a(A,B,F,G):
+                        u = (A**2 + B**2 + F**2 + G**2)/2
+                        v = A*G - B*F
+                        a = (u + ((u+v)*(u-v))**(0.5))**(0.5)
+                        return a
+                    
+                    self.posteriors.a = Campbell_a(self.posteriors.A,self.posteriors.B,self.posteriors.F,self.posteriors.G)
                 else:
                     #a0s 
-                    s = self.indices['planets.a0']
-                    self.posteriors.a0 = self.posterior_sample[:, s]
-                    self._priors.a0 = self.priors['a0prior']
+                    s = self.indices['planets.a']
+                    self.posteriors.a = self.posterior_sample[:, s]
+                    self._priors.a = self.priors['aprior']
 
                     # omegas
                     s = self.indices['planets.w']
                     w = self.posteriors.w = self.posteriors.ω = self.posterior_sample[:, s]
                     self.posteriors.w_deg = self.posteriors.ω_deg = np.rad2deg(w)
-                    self._priors.w = self.priors['omegaprior']
+                    self._priors.w = self.priors['wprior']
 
                     # cosi
                     s = self.indices['planets.cosi']
@@ -1927,15 +2119,14 @@ class KimaResults:
                     s = self.indices['planets.W']
                     W = self.posteriors.W = self.posteriors.Ω = self.posterior_sample[:, s]
                     self.posteriors.W_deg = self.posteriors.Ω_deg = np.rad2deg(W)
-                    self._priors.W = self.priors['Omegaprior']
+                    self._priors.W = self.priors['Wprior']
 
                 if self.model is MODELS.RVGAIAmodel:
                     _Kfroma0 = np.vectorize(Kfroma0)
-                    self.posteriors.K = _Kfroma0(self.posteriors.P, self.posteriors.a0,
+                    self.posteriors.K = _Kfroma0(self.posteriors.P, self.posteriors.a,
                                                 self.posteriors.e, self.posteriors.cosi,
                                                 self.posteriors.plx.reshape(-1, 1))
 
-            ### Also add ETV ones
             else:
                 # periods
                 s = self.indices['planets.P']
@@ -1965,7 +2156,10 @@ class KimaResults:
                 self._priors.w = self.priors['wprior']
 
                 # times of periastron
-                self.posteriors.Tp = (self.posteriors.P * self.posteriors.φ) / (2 * np.pi) + self.M0_epoch
+                if self.model is MODELS.ETVmodel:
+                    self.posteriors.Tp = (self.posteriors.P * self.posteriors.φ) / (2 * np.pi) + self.posteriors.ref_time
+                else:
+                    self.posteriors.Tp = (self.posteriors.P * self.posteriors.φ) / (2 * np.pi) + self.M0_epoch
 
                 
                 if self.model is MODELS.RVHGPMmodel:
@@ -1977,7 +2171,7 @@ class KimaResults:
                     s = self.indices['planets.W']
                     W = self.posteriors.W = self.posteriors.Ω = self.posterior_sample[:, s]
                     self.posteriors.W_deg = self.posteriors.Ω_deg = np.rad2deg(W)
-                    self._priors.W = self.priors['Omegaprior']
+                    self._priors.W = self.priors['Wprior']
 
 
         if self.KO:
@@ -2001,9 +2195,9 @@ class KimaResults:
                     self.posteriors.KO.wdot = self.KOpars[:, range(5*self.nKO, 6*self.nKO)]
                     self.posteriors.KO.cosi = self.KOpars[:, range(6*self.nKO, 7*self.nKO)]
             elif self.model in (MODELS.GAIAmodel,MODELS.RVGAIAmodel):
-                self.posteriors.KO.a0 = self.KOpars[:, range(1*self.nKO, 2*self.nKO)]
-                self.posteriors.KO.φ = self.KOpars[:, range(2*self.nKO, 3*self.nKO)]
-                self.posteriors.KO.e = self.KOpars[:, range(3*self.nKO, 4*self.nKO)]
+                self.posteriors.KO.φ = self.KOpars[:, range(1*self.nKO, 2*self.nKO)]
+                self.posteriors.KO.e = self.KOpars[:, range(2*self.nKO, 3*self.nKO)]
+                self.posteriors.KO.a = self.KOpars[:, range(3*self.nKO, 4*self.nKO)]
                 self.posteriors.KO.w = self.KOpars[:, range(4*self.nKO, 5*self.nKO)]
                 self.posteriors.KO.cosi = self.KOpars[:, range(5*self.nKO, 6*self.nKO)]
                 self.posteriors.KO.W = self.KOpars[:, range(6*self.nKO, 7*self.nKO)]
@@ -2221,18 +2415,17 @@ class KimaResults:
         return map_sample
     
     def maximum_likelihood(self, Np=None, from_posterior=False):
-        """ Get the maximum log-likelihood value
-        
+        """Get the maximum log-likelihood value
+
         Args:
             Np (int, optional):
                 If given, select only samples with that number of planets.
-            from_posterior (bool, optional): 
+            from_posterior (bool, optional):
                 If True, return the highest likelihood value *from samples that
                 represent the posterior*.
         """
         if self.sample_info is None and not self._lnlike_available:
-            print('log-likelihoods are not available! '
-                  'max_log_likelihood() doing nothing...')
+            print("log-likelihoods are not available! max_log_likelihood() doing nothing...")
             return
 
         if from_posterior:
@@ -2243,12 +2436,12 @@ class KimaResults:
             return self.sample_info[ind, 1].max()
 
     def maximum_likelihood_sample(self, Np=None, printit=True, mask=None,
-                                  from_posterior=False, optimize=False):
-        """
-        Get the maximum likelihood sample. 
-        
+                                   from_posterior=False, optimize=False,
+                                   save=False):
+        """Get the maximum likelihood sample.
+
         By default, this is the highest likelihood sample found by DNest4.
-        
+
         Note:
             If `from_posterior=True`, the returned sample may change, due to
             random choices, between different calls to `load_results`.
@@ -2258,16 +2451,18 @@ class KimaResults:
                 If given, select only samples with that number of planets.
             printit (bool, optional):
                 Whether to print the sample
-            from_posterior (bool, optional): 
+            from_posterior (bool, optional):
                 If True, return the highest likelihood sample *from those that
-                represent the posterior*. 
+                represent the posterior*.
             optimize (bool, optional):
                 If True, optimize the likelihood, starting from the maximum
-                likelihood sample.
+                likelihood sample. Prior bounds are enforced, but the prior
+                itself is not taken into account in the optimization (only the
+                likelihood is optimized). Note that *Np is not changed* during
+                the optimization.
         """
         if self.sample_info is None and not self._lnlike_available:
-            print('log-likelihoods are not available! '
-                  'maximum_likelihood_sample() doing nothing...')
+            print("log-likelihoods are not available! maximum_likelihood_sample() doing nothing...")
             return
 
         if from_posterior:
@@ -2284,9 +2479,25 @@ class KimaResults:
             pars = self.sample[ind][ind_maxlike]
 
         if optimize:
-            # TODO: should take into account the prior (bounds)
             from scipy.optimize import minimize
-            res = minimize(lambda p: -self.log_likelihood(p), pars)
+            from .utils import distribution_support
+            priors = self.parameter_priors.copy()
+            bounds = []
+            for i, p in enumerate(priors):
+                # print(self._parameters[i], p)
+                if self._parameters[i] in ('ndim', 'maxNp', 'staleness'):
+                    bounds.append((pars[i], pars[i]))
+                elif i == self.indices['np']:
+                    bounds.append((pars[i], pars[i]))
+                elif p is None:
+                    bounds.append((None, None))
+                else:
+                    mi, ma = distribution_support(p)
+                    mi = None if np.isinf(mi) else mi
+                    ma = None if np.isinf(ma) else ma
+                    bounds.append((mi, ma))
+
+            res = minimize(lambda p: -self.log_likelihood(p), pars, bounds=bounds)
             maxlike = -res.fun
             pars = res.x
 
@@ -2303,8 +2514,7 @@ class KimaResults:
             if Np is not None:
                 print(f'from samples with {Np=} only')
 
-            msg = '-> might not be representative '\
-                  'of the full posterior distribution\n'
+            msg = '-> might not be representative of the full posterior distribution\n'
             print(msg)
 
             self.print_sample(pars)
@@ -2395,7 +2605,7 @@ class KimaResults:
                 if self.thiele_innes:
                     pars = ['P', 'phi', 'ecc', 'A', 'B', 'F', 'G']
                 else:
-                    pars = ['P', 'phi', 'ecc', 'a0', 'w', 'cosi', 'W']
+                    pars = ['P', 'phi', 'ecc', 'a', 'w', 'cosi', 'W']
             elif self.model is MODELS.RVHGPMmodel:
                 pars = ['P', 'K', 'M0', 'e', 'w', 'i', 'W']
             else:
@@ -2460,7 +2670,7 @@ class KimaResults:
             print('orbital parameters: ', end='')
             extra_n = 0
             if self.model in (MODELS.GAIAmodel,MODELS.RVGAIAmodel):
-                pars = ['P', 'a0', 'phi', 'ecc', 'w', 'cosi', 'W']
+                pars = ['P', 'phi', 'ecc', 'a', 'w', 'cosi', 'W']
             elif self.model is MODELS.BINARIESmodel:
                 if self.double_lined:
                     pars = ['P', 'K', 'q', 'M0', 'e', 'w', 'wdot','cosi']
@@ -2687,10 +2897,15 @@ class KimaResults:
 
         data_t = False
         if t is None or t is self.data.t:
-            t = self.data.t.copy()
+            if self.model is MODELS.ETVmodel:
+                epochs = self.data.epochs.copy()
+                ephem1 = sample[self.indices['ephem1']]
+                t = epochs * ephem1
+            else:
+                t = self.data.t.copy()
             data_t = True
 
-        ONE_D_MODELS = [MODELS.RVmodel, MODELS.GPmodel, MODELS.RVHGPMmodel, MODELS.RVGAIAmodel]
+        ONE_D_MODELS = [MODELS.RVmodel, MODELS.GPmodel, MODELS.RVHGPMmodel, MODELS.RVGAIAmodel, MODELS.ETVmodel]
 
         if self.model is MODELS.RVFWHMmodel:
             v = np.zeros((2, t.size))
@@ -2710,6 +2925,20 @@ class KimaResults:
         if self.model is MODELS.RVGAIAmodel:
             da,dd,mua,mud,plx = sample[self.indices['astrometric_solution']]
 
+        if self.model is MODELS.ETVmodel:
+            if self.ephemeris >=3:
+                ephem1 = sample[self.indices['ephem1']]
+                ephem2 = sample[self.indices['ephem2']]
+                ephem3 = sample[self.indices['ephem3']]
+                v += sample[self.indices['ref_time']] + t + ephem2*(t**2)/ephem1/2 + ephem3*(t**3)/ephem2/6
+            elif self.ephemeris >=2:  
+                ephem1 = sample[self.indices['ephem1']]
+                ephem2 = sample[self.indices['ephem2']]
+                v += sample[self.indices['ref_time']] + t + ephem2*(t**2)/ephem1/2
+            else:
+                ephem1 = sample[self.indices['ephem1']]
+                v += sample[self.indices['ref_time']] + t
+
         if include_planets:
             if single_planet and except_planet:
                 raise ValueError("'single_planet' and 'except_planet' "
@@ -2727,7 +2956,7 @@ class KimaResults:
             # known_object ? 
             # For BINARIESmodel and double_lined especially, need to deal with
             # the extra parameters in those models and using the correct Keplerian
-            # also for the RVGAIA model, converting a0 into K
+            # also for the RVGAIA model, converting a into K
             pj = 0
             if self.KO and include_known_object:
                 pars = sample[self.indices['KOpars']].copy()
@@ -2742,12 +2971,12 @@ class KimaResults:
 
                     P = pars[j + 0 * self.nKO]
                     if self.model is MODELS.RVGAIAmodel:
-                        a0 = pars[j + 1 * self.nKO]
-                        phi = pars[j + 2 * self.nKO]
-                        ecc = pars[j + 3 * self.nKO]
+                        phi = pars[j + 1 * self.nKO]
+                        ecc = pars[j + 2 * self.nKO]
+                        a = pars[j + 3 * self.nKO]
                         w = pars[j + 4 * self.nKO]
                         cosi = pars[j + 5 * self.nKO]
-                        K = Kfroma0(P,a0,ecc,cosi,plx)
+                        K = Kfroma0(P,a,ecc,cosi,plx)
                     # t0 = (P * phi) / (2. * np.pi) + self.M0_epoch
                     elif self.model is MODELS.BINARIESmodel:
                         K = pars[j + 1 * self.nKO]
@@ -2784,7 +3013,9 @@ class KimaResults:
                     else:
                         if self.model is MODELS.BINARIESmodel and j==0:
                             Panom = period_correction(P,wdot)
-                            v += post_keplerian(t, Panom, K, ecc, w, wdot, phi, self.M0_epoch, cosi, self.star_mass, self.binary_mass, self.star_radius, self.relativistic_correction, self.tidal_correction)
+                            v += post_keplerian(t, Panom, K, ecc, w, wdot, phi, self.M0_epoch, cosi, self.star_mass, self.binary_mass, self.star_radius, self.relativistic_correction, self.tidal_correction, self.correction_K_precision)
+                        elif self.model is MODELS.ETVmodel:
+                            v += keplerian_etv(t/ephem1, P, K, ecc, w, phi, ephem1)/(24*3600)
                         else:
                             v += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
 
@@ -2837,10 +3068,10 @@ class KimaResults:
                 if self.model is MODELS.RVGAIAmodel:
                     phi = pars[j + 1 * self.max_components]
                     ecc = pars[j + 2 * self.max_components]
-                    a0 = pars[j + 3 * self.max_components]
+                    a = pars[j + 3 * self.max_components]
                     w = pars[j + 4 * self.max_components]
                     cosi = pars[j + 5 * self.max_components]
-                    K = Kfroma0(P,a0,ecc,cosi,plx)
+                    K = Kfroma0(P,a,ecc,cosi,plx)
                 else:
                     K = pars[j + 1 * self.max_components]
                     phi = pars[j + 2 * self.max_components]
@@ -2852,6 +3083,8 @@ class KimaResults:
                     v[0] += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
                     if self.model is MODELS.BINARIESmodel:
                         v[1] += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
+                elif self.model is MODELS.ETVmodel:
+                    v += keplerian_etv(t/ephem1, P, K, ecc, w, phi, ephem1)/(24*3600)
                 else:
                     v += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
 
@@ -2874,7 +3107,7 @@ class KimaResults:
                 v += C.reshape(-1, 1)
             else:
                 v += sample[self.indices['vsys']]
-        else:
+        elif self.model != MODELS.ETVmodel:
             v += sample[self.indices['vsys']]
 
         # if evaluating at the same times as the data, add instrument offsets
@@ -3001,9 +3234,13 @@ class KimaResults:
             n2 = self.posterior_sample.shape[1]
             msg = '`sample` has wrong dimensions, expected %d got %d' % (n2, n1)
             raise ValueError(msg)
-
         if t is None or t is self.data.t:
-            t = self.data.t.copy()
+            if self.model is MODELS.ETVmodel:
+                epochs = self.data.epochs.copy()
+                ephem1 = sample[self.indices['ephem1']]
+                t = epochs * ephem1
+            else:
+                t = self.data.t.copy()
 
         if self.model is MODELS.RVFWHMmodel:
             v = np.zeros((2, t.size))
@@ -3063,12 +3300,12 @@ class KimaResults:
                         wdot = pars[j + 5 * self.nKO]
                         cosi = pars[j + 6 * self.nKO]
                 elif self.model is MODELS.RVGAIAmodel:
-                    a0 = pars[j + 1 * self.nKO]
-                    phi = pars[j + 2 * self.nKO]
-                    ecc = pars[j + 3 * self.nKO]
+                    phi = pars[j + 1 * self.nKO]
+                    ecc = pars[j + 2 * self.nKO]
+                    a = pars[j + 3 * self.nKO]
                     w = pars[j + 4 * self.nKO]
                     cosi = pars[j + 5 * self.nKO]
-                    K = Kfroma0(P,a0,ecc,cosi,plx)
+                    K = Kfroma0(P,a,ecc,cosi,plx)
                 else:
                     K = pars[j + 1 * self.nKO]
                     phi = pars[j + 2 * self.nKO]
@@ -3093,12 +3330,14 @@ class KimaResults:
                     else:
                         if j==0:
                             Panom = period_correction(P,wdot)
-                            v += post_keplerian(t, Panom, K, ecc, w, wdot, phi, self.M0_epoch, cosi, self.star_mass, self.binary_mass, self.star_radius, self.relativistic_correction, self.tidal_correction)
+                            v += post_keplerian(t, Panom, K, ecc, w, wdot, phi, self.M0_epoch, cosi, self.star_mass, self.binary_mass, self.star_radius, self.relativistic_correction, self.tidal_correction, self.correction_K_precision)
                             if except_planet is not None:
                                 if -pj in except_planet:
-                                    v -= post_keplerian(t, P, K, ecc, w, 0, phi, self.M0_epoch, cosi, self.star_mass, self.binary_mass, self.star_radius, False, False)
+                                    v -= post_keplerian(t, P, K, ecc, w, 0, phi, self.M0_epoch, cosi, self.star_mass, self.binary_mass, self.star_radius, False, False, self.correction_K_precision)
                         else:
                             v += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
+                elif self.model is MODELS.ETVmodel:
+                    v += keplerian_etv(t/ephem1, P, K, ecc, w, phi, ephem1)/(24*3600)
                 else:
                     v += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
 
@@ -3149,10 +3388,10 @@ class KimaResults:
                 phi = pars[j + 1 * self.max_components]
                 # t0 = (P * phi) / (2. * np.pi) + self.M0_epoch
                 ecc = pars[j + 2 * self.max_components]
-                a0 = pars[j + 3 * self.max_components]
+                a = pars[j + 3 * self.max_components]
                 w = pars[j + 4 * self.max_components]
                 cosi = pars[j + 5 * self.max_components]
-                K = Kfroma0(P,a0,ecc,cosi,plx)
+                K = Kfroma0(P,a,ecc,cosi,plx)
             else:
                 K = pars[j + 1 * self.max_components]
                 phi = pars[j + 2 * self.max_components]
@@ -3160,6 +3399,8 @@ class KimaResults:
                 w = pars[j + 4 * self.max_components]
             if self.model in (MODELS.RVFWHMmodel, MODELS.RVFWHMRHKmodel):
                 v[0, :] += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
+            elif self.model is MODELS.ETVmodel:
+                v += keplerian_etv(t/ephem1, P, K, ecc, w, phi, ephem1)/(24*3600)
             else:
                 v += keplerian(t, P, K, ecc, w, phi, self.M0_epoch)
 
@@ -3211,7 +3452,12 @@ class KimaResults:
             raise ValueError(msg)
 
         if t is None or t is self.data.t:
-            t = self.data.t.copy()
+            if self.model is MODELS.ETVmodel:
+                epochs = self.data.epochs.copy()
+                ephem1 = sample[self.indices['ephem1']]
+                t = epochs * ephem1
+            else:
+                t = self.data.t.copy()
 
         if not self.has_gp:
             if return_std:
@@ -3553,10 +3799,20 @@ class KimaResults:
         Calculates individual log-evidences for each Np value. When Np is fixed,
         simply return the full model log-evidence.
         """
+        import warnings
         if self.fix:
             return self.evidence
-        from .analysis import compute_values_from_ratios
-        return np.log(compute_values_from_ratios(np.exp(self.evidence), self.ratios))
+        from .analysis import compute_values_from_ratios_log
+        ratios = self.ratios.copy()
+        if (inf := np.isinf(ratios)).any():
+            warnings.warn(f'{self}: evidence values for Np={np.where(inf)[0]} are upper limits')
+            ratios[inf] = self.ESS
+        if (nan := np.isnan(ratios)).any():
+            warnings.warn(f'{self}: no samples for Np={np.where(nan)[0]} values')
+            ratios = ratios[~nan]
+        # return np.log(compute_values_from_ratios(np.exp(self.evidence), ratios))
+        logZs = compute_values_from_ratios_log(self.evidence, ratios)
+        return np.r_[np.full(nan.sum(), -np.inf), logZs]
 
     def residuals(self, sample, full=False):
         if self.model is MODELS.RVFWHMmodel:
@@ -3568,6 +3824,8 @@ class KimaResults:
                 D = np.vstack([self.data.y, self.data.y2])
             else:
                 D = self.data.y
+        elif self.model is MODELS.ETVmodel:
+            D = self.data.et
         else:
             D = self.data.y
 
@@ -4113,14 +4371,14 @@ class KimaResults:
                 prior_short = prior_short.replace('Uniform', 'U')
                 prior_short = prior_short.replace('Kumaraswamy', 'Kuma')
                 prior_short = prior_short.replace('Gaussian', 'G')
-                print('    %-15s: %-20s Ͱ %-24s %60s' % (p, med_sigma, prior_short, range_dist))
+                print("    %-15s: %-20s Ͱ %-24s %60s" % (p, med_sigma, prior_short, range_dist))
             else:
-                print('    %-15s: %-20s Ͱ %60s' % (p, med_sigma, range_dist))
+                print("    %-15s: %-20s Ͱ %60s" % (p, med_sigma, range_dist))
 
         ########
 
-        print(f'logL max: {self.sample_info[:,1].max():.2f}')
-        print(f'logZ: {self.evidence:.2f}', end='\n\n')
+        print(f"logL max: {self.sample_info[:, 1].max():.2f}")
+        print(f"logZ: {self.evidence:.2f}", end="\n\n")
         print_header()
 
         # if self.posteriors.jitter.ndim == 1:
@@ -4222,11 +4480,11 @@ class KimaResults:
                 Np_mask = self.Np > i
                 if not Np_mask.any():
                     continue
-                print_line(f'{i+1}: P', self.posteriors.P[Np_mask, i], self.priors['Pprior'], show_prior)
-                print_line(f'{i+1}: K', self.posteriors.K[Np_mask, i], self.priors['Kprior'], show_prior)
-                print_line(f'{i+1}: M0', self.posteriors.φ[Np_mask, i], self.priors['phiprior'], show_prior)
-                print_line(f'{i+1}: e', self.posteriors.e[Np_mask, i], self.priors['eprior'], show_prior)
-                print_line(f'{i+1}: w', self.posteriors.w[Np_mask, i], self.priors['wprior'], show_prior)
+                print_line(f'{i + 1}: P', self.posteriors.P[Np_mask, i], self.priors['Pprior'], show_prior)
+                print_line(f'{i + 1}: K', self.posteriors.K[Np_mask, i], self.priors['Kprior'], show_prior)
+                print_line(f'{i + 1}: M0', self.posteriors.φ[Np_mask, i], self.priors['phiprior'], show_prior)
+                print_line(f'{i + 1}: e', self.posteriors.e[Np_mask, i], self.priors['eprior'], show_prior)
+                print_line(f'{i + 1}: w', self.posteriors.w[Np_mask, i], self.priors['wprior'], show_prior)
                 print('    --')
         
         if self.has_gp:
@@ -4276,6 +4534,9 @@ class KimaResults:
             self.plot_hgpm = partial(display.plot_hgpm,
                                      res=self, pm_data=self.pm_data)
             self.hist_bary = partial(display.hist_bary, res=self)
+        
+        if self.model in (MODELS.GAIAmodel, MODELS.RVGAIAmodel):
+            self.hist_astrometric_solution = partial(display.hist_astrometric_solution, res=self)
 
     #
     hist_vsys = display.hist_vsys

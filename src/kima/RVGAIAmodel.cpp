@@ -10,6 +10,10 @@ using namespace MassConv;
 #define TIMING false
 
 const double halflog2pi = 0.5*log(2.*M_PI);
+const double daytoyear = 1/365.25;
+const double daytoyear2 = 1/(365.25*365.25);
+const double daytoyear3 = 1/(365.25*365.25*365.25);
+const double yeartoday = 365.25;
 
 
 void RVGAIAmodel::initialize_from_data(GAIAdata& GAIA_data, RVData& RV_data)
@@ -30,26 +34,58 @@ void RVGAIAmodel::initialize_from_data(GAIAdata& GAIA_data, RVData& RV_data)
     conditional->set_default_priors(GAIA_data, RV_data);
 }
 
+void RVGAIAmodel::set_baseline_model(size_t n)
+{
+    n_baseline_params = n;
+    if (n==5){
+        acceleration = false;
+        jerk = false;
+    }
+    else if (n==7){
+        acceleration = true;
+        jerk = false;
+    }
+    else if (n==9){
+        acceleration = true;
+        jerk = true;
+    }
+    else {
+        throw std::logic_error("When setting an astrometric baseline solution please choose one of 5 (standard), 7 (+ acceleration) or 9 (+ jerk) for the number of parameters.");
+    }
+}
+
+void RVGAIAmodel::set_scan_dep_signal(size_t n)
+{
+    scan_dep_signal = true;
+    n_scan_dep_components = n;
+
+    Ak.resize(n);
+    thetak.resize(n);
+
+    Ak_prior.resize(n);
+    thetak_prior.resize(n);
+}
+
 void RVGAIAmodel::set_known_object(size_t n)
 {
     known_object = true;
     n_known_object = n;
 
     KO_Pprior.resize(n);
-    KO_a0prior.resize(n);
+    KO_aprior.resize(n);
     KO_eprior.resize(n);
     KO_phiprior.resize(n);
-    KO_omegaprior.resize(n);
+    KO_wprior.resize(n);
     KO_cosiprior.resize(n);
-    KO_Omegaprior.resize(n);
+    KO_Wprior.resize(n);
 
     KO_P.resize(n);
-    KO_a0.resize(n);
+    KO_a.resize(n);
     KO_e.resize(n);
     KO_phi.resize(n);
-    KO_omega.resize(n);
+    KO_w.resize(n);
     KO_cosi.resize(n);
-    KO_Omega.resize(n);
+    KO_W.resize(n);
 
     // KO_Mints.resize(n);
 }
@@ -71,7 +107,7 @@ void RVGAIAmodel::setPriors()  // BUG: should be done by only one thread!
         );
     
     if (!J_GAIA_prior)
-        J_GAIA_prior = make_prior<ModifiedLogUniform>(0.1,100.);
+        J_GAIA_prior = make_prior<ModifiedLogUniform>(0.01,10.);
 
     // if (!star_mass_prior)
     //     star_mass_prior = make_prior<Gaussian>(1.0,0.5);
@@ -105,17 +141,29 @@ void RVGAIAmodel::setPriors()  // BUG: should be done by only one thread!
     if (!dd_prior)
         dd_prior = make_prior<Gaussian>(0.0,pow(10,0));
     if (!mua_prior)
-        mua_prior = make_prior<Gaussian>(0.0,pow(10,1));
+        mua_prior = make_prior<Gaussian>(0.0,pow(10,2));
     if (!mud_prior)
-        mud_prior = make_prior<Gaussian>(0.0,pow(10,1));
+        mud_prior = make_prior<Gaussian>(0.0,pow(10,2));
     if (!plx_prior)
         plx_prior = make_prior<LogUniform>(1.,100.);
+    if (acceleration) {
+        if (!accela_prior)
+            accela_prior = make_prior<Gaussian>(0.0,2);
+        if (!acceld_prior)
+            acceld_prior = make_prior<Gaussian>(0.0,2);
+        if (jerk) {
+            if (!jerka_prior)
+                jerka_prior = make_prior<Gaussian>(0.0,10);
+            if (!jerkd_prior)
+                jerkd_prior = make_prior<Gaussian>(0.0,10);
+        }
+    }
         
     if (known_object) { // KO mode!
         // if (n_known_object == 0) cout << "Warning: `known_object` is true, but `n_known_object` is set to 0";
         for (int i = 0; i < n_known_object; i++){
-            if (!KO_Pprior[i] || !KO_a0prior[i] || !KO_eprior[i] || !KO_phiprior[i] || !KO_omegaprior[i] || !KO_cosiprior[i] || !KO_Omegaprior[i])
-                throw std::logic_error("When known_object=true, please set priors for each (KO_Pprior, KO_a0prior, KO_eprior, KO_phiprior, KO_omegaprior, KO_cosiprior, KO_Omegaprior)");
+            if (!KO_Pprior[i] || !KO_aprior[i] || !KO_eprior[i] || !KO_phiprior[i] || !KO_wprior[i] || !KO_cosiprior[i] || !KO_Wprior[i])
+                throw std::logic_error("When known_object=true, please set priors for each (KO_Pprior, KO_phiprior, KO_eprior, KO_aprior, KO_wprior, KO_cosiprior, KO_Wprior)");
         }
     }
 
@@ -139,6 +187,14 @@ void RVGAIAmodel::from_prior(RNG& rng)
     
     
     jitter_GAIA = J_GAIA_prior->generate(rng);
+
+    if (scan_dep_signal)
+    {
+        for (int i=0; i<n_scan_dep_components; i++){
+            Ak[i] = Ak_prior[i]->generate(rng);
+            thetak[i] = thetak_prior[i]->generate(rng);
+        }
+    }
     
     background = Cprior->generate(rng);
     
@@ -147,6 +203,15 @@ void RVGAIAmodel::from_prior(RNG& rng)
     mua = mua_prior->generate(rng);
     mud = mud_prior->generate(rng);
     plx = plx_prior->generate(rng);
+
+    if (acceleration){
+        accela = accela_prior->generate(rng);
+        acceld = acceld_prior->generate(rng);
+        if (jerk){
+            jerka = jerka_prior->generate(rng);
+            jerkd = jerkd_prior->generate(rng);
+        }
+    }
     
     if(RV_data._multi)
     {
@@ -177,12 +242,12 @@ void RVGAIAmodel::from_prior(RNG& rng)
 
         for (int i=0; i<n_known_object; i++){
             KO_P[i] = KO_Pprior[i]->generate(rng);
-            KO_a0[i] = KO_a0prior[i]->generate(rng);
+            KO_a[i] = KO_aprior[i]->generate(rng);
             KO_e[i] = KO_eprior[i]->generate(rng);
             KO_phi[i] = KO_phiprior[i]->generate(rng);
-            KO_omega[i] = KO_omegaprior[i]->generate(rng);
+            KO_w[i] = KO_wprior[i]->generate(rng);
             KO_cosi[i] = KO_cosiprior[i]->generate(rng);
-            KO_Omega[i] = KO_Omegaprior[i]->generate(rng);
+            KO_W[i] = KO_Wprior[i]->generate(rng);
         }
     }
 
@@ -233,7 +298,13 @@ void RVGAIAmodel::calculate_mu()
         
         for(size_t i=0; i<N_GAIA; i++)
         {
-            mu_GAIA[i] += (da + mua * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * sin(GAIA_data.psi[i]) + (dd + mud * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * cos(GAIA_data.psi[i]) + plx*GAIA_data.pf[i];
+            mu_GAIA[i] += (da + mua * daytoyear * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * sin(GAIA_data.psi[i]) + (dd + mud * daytoyear * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * cos(GAIA_data.psi[i]) + plx*GAIA_data.pf[i];
+            if (acceleration){
+                mu_GAIA[i] += (accela * daytoyear2 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),2) / 2) * sin(GAIA_data.psi[i]) + (acceld * daytoyear2 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),2) / 2) * cos(GAIA_data.psi[i]);
+                if (jerk){
+                    mu_GAIA[i] += (jerka * daytoyear3 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),3) / 6) * sin(GAIA_data.psi[i]) + (jerkd * daytoyear3 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),3) / 6) * cos(GAIA_data.psi[i]);
+                }
+            }
         }
         
         if(trend)
@@ -269,6 +340,14 @@ void RVGAIAmodel::calculate_mu()
 
         if (known_object) { // KO mode!
             add_known_object();
+        }
+
+        if (scan_dep_signal) {
+            for (int j=0; j<n_scan_dep_components; j++){
+                for(size_t i=0; i<mu_GAIA.size(); i++){
+                    mu_GAIA[i] += Ak[j] * cos((j*2 + 3)*(GAIA_data.psi[i] - thetak[j]));
+                }
+            }
         }
     }
     else // just updating (adding) planets
@@ -383,13 +462,13 @@ void RVGAIAmodel::remove_known_object()
 
         // a0 = MassConv::SemiPhotfromK(KO_P[j],KO_K[j],KO_e[j],KO_cosi[j],plx);
         // K = KO_K[j];
-        K = MassConv::KfromSemiPhot(KO_P[j],KO_a0[j],KO_e[j],KO_cosi[j],plx);
-        a0 = KO_a0[j];
+        K = MassConv::KfromSemiPhot(KO_P[j],KO_a[j],KO_e[j],KO_cosi[j],plx);
+        a0 = KO_a[j];
         
-        A = a0*(cos(KO_omega[j]) * cos(KO_Omega[j]) - sin(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        B = a0*(cos(KO_omega[j]) * sin(KO_Omega[j]) + sin(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-        F = -a0*(sin(KO_omega[j]) * cos(KO_Omega[j]) + cos(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        G = -a0*(sin(KO_omega[j]) * sin(KO_Omega[j]) - cos(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
+        A = a0*(cos(KO_w[j]) * cos(KO_W[j]) - sin(KO_w[j]) * sin(KO_W[j]) * KO_cosi[j]);
+        B = a0*(cos(KO_w[j]) * sin(KO_W[j]) + sin(KO_w[j]) * cos(KO_W[j]) * KO_cosi[j]);
+        F = -a0*(sin(KO_w[j]) * cos(KO_W[j]) + cos(KO_w[j]) * sin(KO_W[j]) * KO_cosi[j]);
+        G = -a0*(sin(KO_w[j]) * sin(KO_W[j]) - cos(KO_w[j]) * cos(KO_W[j]) * KO_cosi[j]);
 
         auto wk = brandt::keplerian_gaia(GAIA_data.t, GAIA_data.psi, A, B, F, G, KO_e[j], KO_P[j], KO_phi[j], GAIA_data.M0_epoch);
         for (size_t i = 0; i < GAIA_data.N(); i++)
@@ -397,28 +476,11 @@ void RVGAIAmodel::remove_known_object()
             mu_GAIA[i] -= wk[i];
         }
 
-        auto v = brandt::keplerian(RV_data.t, KO_P[j], K, KO_e[j], KO_omega[j], KO_phi[j], GAIA_data.M0_epoch);
+        auto v = brandt::keplerian(RV_data.t, KO_P[j], K, KO_e[j], KO_w[j], KO_phi[j], GAIA_data.M0_epoch);
         for (size_t i = 0; i < RV_data.N(); i++)
         {
             mu_RV[i] -= v[i];
         }
-
-//         for(size_t i=0; i<data.N(); i++)
-//         {
-//             ti = data.t[i];
-//             
-//             A = KO_a0[j]*(cos(KO_omega[j]) * cos(KO_Omega[j]) - sin(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-//             B = KO_a0[j]*(cos(KO_omega[j]) * sin(KO_Omega[j]) - sin(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-//             F = -KO_a0[j]*(sin(KO_omega[j]) * cos(KO_Omega[j]) - cos(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-//             G = -KO_a0[j]*(sin(KO_omega[j]) * sin(KO_Omega[j]) - cos(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-//             
-//             Tp = data.M0_epoch-(KO_P[j]*KO_phi[j])/(2.*M_PI);
-//             
-//             tie(X,Y) = nijenhuis::ellip_rectang(ti, KO_P[j], KO_e[j], Tp);
-//             
-//             wk =(B*X + G*Y)*sin(data.psi[i]) + (A*X + F*Y)*cos(data.psi[i]);
-//             mu[i] -= wk;
-//         }
     }
 }
 
@@ -434,13 +496,13 @@ void RVGAIAmodel::add_known_object()
 
         // a0 = MassConv::SemiPhotfromK(KO_P[j],KO_K[j],KO_e[j],KO_cosi[j],plx);
         // K = KO_K[j];
-        K = MassConv::KfromSemiPhot(KO_P[j],KO_a0[j],KO_e[j],KO_cosi[j],plx);
-        a0 = KO_a0[j];
+        K = MassConv::KfromSemiPhot(KO_P[j],KO_a[j],KO_e[j],KO_cosi[j],plx);
+        a0 = KO_a[j];
 
-        A = a0*(cos(KO_omega[j]) * cos(KO_Omega[j]) - sin(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        B = a0*(cos(KO_omega[j]) * sin(KO_Omega[j]) + sin(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-        F = -a0*(sin(KO_omega[j]) * cos(KO_Omega[j]) + cos(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-        G = -a0*(sin(KO_omega[j]) * sin(KO_Omega[j]) - cos(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
+        A = a0*(cos(KO_w[j]) * cos(KO_W[j]) - sin(KO_w[j]) * sin(KO_W[j]) * KO_cosi[j]);
+        B = a0*(cos(KO_w[j]) * sin(KO_W[j]) + sin(KO_w[j]) * cos(KO_W[j]) * KO_cosi[j]);
+        F = -a0*(sin(KO_w[j]) * cos(KO_W[j]) + cos(KO_w[j]) * sin(KO_W[j]) * KO_cosi[j]);
+        G = -a0*(sin(KO_w[j]) * sin(KO_W[j]) - cos(KO_w[j]) * cos(KO_W[j]) * KO_cosi[j]);
         
         auto wk = brandt::keplerian_gaia(GAIA_data.t, GAIA_data.psi, A, B, F, G, KO_e[j], KO_P[j], KO_phi[j], GAIA_data.M0_epoch);
         for (size_t i = 0; i < GAIA_data.N(); i++)
@@ -448,28 +510,11 @@ void RVGAIAmodel::add_known_object()
             mu_GAIA[i] += wk[i];
         }
 
-        auto v = brandt::keplerian(RV_data.t, KO_P[j], K, KO_e[j], KO_omega[j], KO_phi[j], GAIA_data.M0_epoch);
+        auto v = brandt::keplerian(RV_data.t, KO_P[j], K, KO_e[j], KO_w[j], KO_phi[j], GAIA_data.M0_epoch);
         for (size_t i = 0; i < RV_data.N(); i++)
         {
             mu_RV[i] += v[i];
         }
-//         
-//         for(size_t i=0; i<data.N(); i++)
-//         {
-//             ti = data.t[i];
-//             
-//             A = KO_a0[j]*(cos(KO_omega[j]) * cos(KO_Omega[j]) - sin(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-//             B = KO_a0[j]*(cos(KO_omega[j]) * sin(KO_Omega[j]) - sin(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-//             F = -KO_a0[j]*(sin(KO_omega[j]) * cos(KO_Omega[j]) - cos(KO_omega[j]) * sin(KO_Omega[j]) * KO_cosi[j]);
-//             G = -KO_a0[j]*(sin(KO_omega[j]) * sin(KO_Omega[j]) - cos(KO_omega[j]) * cos(KO_Omega[j]) * KO_cosi[j]);
-//             
-//             Tp = data.M0_epoch-(KO_P[j]*KO_phi[j])/(2.*M_PI);
-//             
-//             tie(X,Y) = nijenhuis::ellip_rectang(ti,  KO_P[j], KO_e[j], Tp);
-//             
-//             wk =(B*X + G*Y)*sin(data.psi[i]) + (A*X + F*Y)*cos(data.psi[i]);
-//             mu[i] += wk;
-//         }
     }
 }
 
@@ -522,18 +567,31 @@ double RVGAIAmodel::perturb(RNG& rng)
 
             for (int i=0; i<n_known_object; i++){
                 KO_Pprior[i]->perturb(KO_P[i], rng);
-                KO_a0prior[i]->perturb(KO_a0[i], rng);
+                KO_aprior[i]->perturb(KO_a[i], rng);
                 KO_eprior[i]->perturb(KO_e[i], rng);
                 KO_phiprior[i]->perturb(KO_phi[i], rng);
-                KO_omegaprior[i]->perturb(KO_omega[i], rng);
+                KO_wprior[i]->perturb(KO_w[i], rng);
                 KO_cosiprior[i]->perturb(KO_cosi[i], rng);
-                KO_Omegaprior[i]->perturb(KO_Omega[i], rng);
+                KO_Wprior[i]->perturb(KO_W[i], rng);
             }
 
             // get_interior_masses();
 
             add_known_object();
 
+        }
+
+        if (scan_dep_signal) {
+            for (int j=0; j<n_scan_dep_components; j++){
+                for(size_t i=0; i<mu_GAIA.size(); i++){
+                    mu_GAIA[i] -= Ak[j] * cos((j*2 + 3)*(GAIA_data.psi[i] - thetak[j]));
+                }
+                Ak_prior[j]->perturb(Ak[j], rng);
+                thetak_prior[j]->perturb(thetak[j], rng);
+                for(size_t i=0; i<mu_GAIA.size(); i++){
+                    mu_GAIA[i] += Ak[j] * cos((j*2 + 3)*(GAIA_data.psi[i] - thetak[j]));
+                }
+            }
         }
         
     }
@@ -542,7 +600,13 @@ double RVGAIAmodel::perturb(RNG& rng)
         //subtract astrometric solution
         for(size_t i=0; i<mu_GAIA.size(); i++)
         {
-            mu_GAIA[i] += -(da + mua * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * sin(GAIA_data.psi[i]) - (dd + mud * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * cos(GAIA_data.psi[i]) - plx*GAIA_data.pf[i];
+            mu_GAIA[i] += -(da + mua * daytoyear * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * sin(GAIA_data.psi[i]) - (dd + mud * daytoyear * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * cos(GAIA_data.psi[i]) - plx*GAIA_data.pf[i];
+            if (acceleration){
+                mu_GAIA[i] += - (accela * daytoyear2 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),2) / 2) * sin(GAIA_data.psi[i]) - (acceld * daytoyear2 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),2) / 2) * cos(GAIA_data.psi[i]);
+                if (jerk){
+                    mu_GAIA[i] += - (jerka * daytoyear3 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),3) / 6) * sin(GAIA_data.psi[i]) - (jerkd * daytoyear3 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),3) / 6) * cos(GAIA_data.psi[i]);
+                }
+            }
         }
         // propose new parameters
         da_prior->perturb(da, rng);
@@ -550,12 +614,25 @@ double RVGAIAmodel::perturb(RNG& rng)
         mua_prior->perturb(mua, rng);
         mud_prior->perturb(mud, rng);
         plx_prior->perturb(plx, rng);
+        if (acceleration){
+            accela_prior->perturb(accela, rng);
+            acceld_prior->perturb(acceld, rng);
+            if (jerk){
+                jerka_prior->perturb(jerka, rng);
+                jerkd_prior->perturb(jerkd, rng);
+            }
+        }
 
         //add astrometric solution back in
         for(size_t i=0; i<mu_GAIA.size(); i++)
         {
-            mu_GAIA[i] += (da + mua * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * sin(GAIA_data.psi[i]) + (dd + mud * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * cos(GAIA_data.psi[i]) + plx*GAIA_data.pf[i];
-
+            mu_GAIA[i] += (da + mua * daytoyear * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * sin(GAIA_data.psi[i]) + (dd + mud * daytoyear * (GAIA_data.t[i]-GAIA_data.M0_epoch)) * cos(GAIA_data.psi[i]) + plx*GAIA_data.pf[i];
+            if (acceleration){
+                mu_GAIA[i] += (accela * daytoyear2 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),2) / 2) * sin(GAIA_data.psi[i]) + (acceld * daytoyear2 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),2) / 2) * cos(GAIA_data.psi[i]);
+                if (jerk){
+                    mu_GAIA[i] += (jerka * daytoyear3 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),3) / 6) * sin(GAIA_data.psi[i]) + (jerkd * daytoyear3 * pow((GAIA_data.t[i]-GAIA_data.M0_epoch),3) / 6) * cos(GAIA_data.psi[i]);
+                }
+            }
         }
         
         for(size_t i=0; i<mu_RV.size(); i++)
@@ -778,19 +855,32 @@ void RVGAIAmodel::print(std::ostream& out) const
     out << mua << '\t';
     out << mud << '\t';
     out << plx << '\t';
+
+    if (acceleration){
+        out << accela << '\t';
+        out << acceld << '\t';
+        if (jerk){
+            out << jerka << '\t';
+            out << jerkd << '\t';
+        }
+    }
     
     out.precision(8);
 
     //auto data = get_data();
+    if (scan_dep_signal){
+        for (auto A: Ak) out << A << "\t";
+        for (auto theta: thetak) out << theta << "\t";
+    }
 
     if(known_object){ // KO mode!
         for (auto P: KO_P) out << P << "\t";
-        for (auto a0: KO_a0) out << a0 << "\t";
         for (auto phi: KO_phi) out << phi << "\t";
         for (auto e: KO_e) out << e << "\t";
-        for (auto w: KO_omega) out << w << "\t";
+        for (auto a: KO_a) out << a << "\t";
+        for (auto w: KO_w) out << w << "\t";
         for (auto cosi: KO_cosi) out << cosi << "\t";
-        for (auto Om: KO_Omega) out << Om << "\t";
+        for (auto Om: KO_W) out << Om << "\t";
     }
 
     planets.print(out);
@@ -850,23 +940,39 @@ string RVGAIAmodel::description() const
     desc += "mud" + sep;
     desc += "parallax" + sep;
 
+    if (acceleration){
+        desc += "accela" + sep;
+        desc += "acceld" + sep;
+        if (jerk){
+            desc += "jerka" + sep;
+            desc += "jerkd" + sep;
+        }
+    }
+
     //auto data = get_data();
+    if (scan_dep_signal){
+        for (int i=0; i<n_scan_dep_components; i++)
+            desc += "A"+std::to_string(i*2 + 3) + sep;
+        for (int i=0; i<n_scan_dep_components; i++)
+            desc += "theta"+std::to_string(i*2 + 3) + sep;
+    }
+
+    auto printi = [&](const size_t n, const string& name )
+    {
+        for(size_t i = 0; i < n; i++) 
+        {
+            desc += name + std::to_string(i + index_from) + sep;
+        }
+    };
 
     if(known_object) { // KO mode!
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_P" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_a0" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_phi" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_ecc" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_omega" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_cosi" + std::to_string(i) + sep;
-        for(int i=0; i<n_known_object; i++) 
-            desc += "KO_Omega" + std::to_string(i) + sep;
+        printi(n_known_object, "KO_P");
+        printi(n_known_object, "KO_phi");
+        printi(n_known_object, "KO_ecc");
+        printi(n_known_object, "KO_a");
+        printi(n_known_object, "KO_w");
+        printi(n_known_object, "KO_cosi");
+        printi(n_known_object, "KO_W");
     }
 
     desc += "ndim" + sep + "maxNp" + sep;
@@ -875,13 +981,13 @@ string RVGAIAmodel::description() const
 
     int maxpl = planets.get_max_num_components();
     if (maxpl > 0) {
-        for(int i = 0; i < maxpl; i++) desc += "P" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "phi" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "ecc" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "a0" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "w" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "cosi" + std::to_string(i) + sep;
-        for(int i = 0; i < maxpl; i++) desc += "W" + std::to_string(i) + sep;
+        printi(maxpl, "P");
+        printi(maxpl, "phi");
+        printi(maxpl, "ecc");
+        printi(maxpl, "a");
+        printi(maxpl, "w");
+        printi(maxpl, "cosi");
+        printi(maxpl, "W");
     }
 
     desc += "staleness" + sep;
@@ -902,7 +1008,8 @@ string RVGAIAmodel::description() const
 */
 void RVGAIAmodel::save_setup() {
     std::fstream fout("kima_model_setup.txt", std::ios::out);
-    fout << std::boolalpha;
+    fout << std::boolalpha << std::fixed;
+    fout.precision(15);
 
     fout << "; " << timestamp() << endl << endl;
 
@@ -942,9 +1049,7 @@ void RVGAIAmodel::save_setup() {
         fout << f << ",";
     fout << endl;
 
-    fout.precision(15);
     fout << "M0_epoch: " << GAIA_data.M0_epoch << endl;
-    fout.precision(6);
 
     fout << endl;
 
@@ -976,6 +1081,15 @@ void RVGAIAmodel::save_setup() {
     fout << "mud_prior: " << *mud_prior << endl;
     fout << "parallax_prior: " << *plx_prior << endl;
 
+    if (acceleration){
+        fout << "accela_prior: " << *accela_prior << endl;
+        fout << "acceld_prior: " << *acceld_prior << endl;
+        if (jerk){
+            fout << "jerka _prior: " << *jerka_prior << endl;
+            fout << "jerkd _prior: " << *jerkd_prior << endl;
+        }
+    }
+
     if (studentt)
     {
         fout << "nu_GAIA_prior: " << *nu_GAIA_prior << endl;
@@ -989,22 +1103,30 @@ void RVGAIAmodel::save_setup() {
         fout << "Pprior: " << *conditional->Pprior << endl;
         fout << "phiprior: " << *conditional->phiprior << endl;
         fout << "eprior: " << *conditional->eprior << endl;
-        fout << "a0prior: " << *conditional->a0prior << endl;
-        fout << "omegaprior: " << *conditional->omegaprior << endl;
+        fout << "aprior: " << *conditional->aprior << endl;
+        fout << "wprior: " << *conditional->wprior << endl;
         fout << "cosiprior: " << *conditional->cosiprior << endl;
-        fout << "Omegaprior: " << *conditional->Omegaprior << endl;
+        fout << "Wprior: " << *conditional->Wprior << endl;
+    }
+
+    if (scan_dep_signal){
+        fout << endl << "[priors.scan_dep_signal]" << endl;
+        for(int i=0; i<n_scan_dep_components; i++){
+            fout << "Ak_prior_" << i << ": " << *Ak_prior[i] << endl;
+            fout << "thetak_prior_" << i << ": " << *thetak_prior[i] << endl;
+        }
     }
 
     if (known_object) {
         fout << endl << "[priors.known_object]" << endl;
         for(int i=0; i<n_known_object; i++){
             fout << "Pprior_" << i << ": " << *KO_Pprior[i] << endl;
-            fout << "a0prior_" << i << ": " << *KO_a0prior[i] << endl;
+            fout << "aprior_" << i << ": " << *KO_aprior[i] << endl;
             fout << "eprior_" << i << ": " << *KO_eprior[i] << endl;
             fout << "phiprior_" << i << ": " << *KO_phiprior[i] << endl;
-            fout << "wprior_" << i << ": " << *KO_omegaprior[i] << endl;
+            fout << "wprior_" << i << ": " << *KO_wprior[i] << endl;
             fout << "cosiprior_" << i << ": " << *KO_cosiprior[i] << endl;
-            fout << "Wprior_" << i << ": " << *KO_Omegaprior[i] << endl;
+            fout << "Wprior_" << i << ": " << *KO_Wprior[i] << endl;
         }
     }
 
@@ -1033,6 +1155,7 @@ class RVGAIAmodel_publicist : public RVGAIAmodel
 {
     public:
         using RVGAIAmodel::studentt;
+        using RVGAIAmodel::index_from;
         using RVGAIAmodel::fix;
         using RVGAIAmodel::npmax;
         // using RVGAIAmodel::known_object;
@@ -1075,7 +1198,10 @@ NB_MODULE(RVGAIAmodel, m) {
 
         .def_rw("studentt", &RVGAIAmodel_publicist::studentt,
                 "use a Student-t distribution for the likelihood (instead of Gaussian)")
-
+        //
+        .def_rw("index_from", &RVGAIAmodel_publicist::index_from,
+                "what indexing convention to use for the labelling of keplerians, defaults to 1.")
+        //
         // RA + Dec
         .def_rw("RA", &RVGAIAmodel_publicist::RA,
                 "Right Ascension of the target star (degrees)")
@@ -1096,6 +1222,18 @@ NB_MODULE(RVGAIAmodel, m) {
         //
         .def_rw("indicator_correlations", &RVGAIAmodel_publicist::indicator_correlations, 
                 "include in the model linear correlations with indicators")
+
+        .def("set_scan_dep_signal", &RVGAIAmodel::set_scan_dep_signal,
+                "set whether the model includes a model for potential scan-angle dependent signals")
+        .def_prop_ro("scan_dep_signal", [](RVGAIAmodel &m) { return m.get_scan_dep_signal(); },
+                     "whether the model includes a model for potential scan-angle dependent signals that could bias towards certain frequencies")
+        .def_prop_ro("n_scan_dep_components", [](RVGAIAmodel &m) { return m.get_n_scan_dep_components(); },
+                     "how many components of scan-angle harmonics are included")
+
+        .def("set_baseline_model", &RVGAIAmodel::set_baseline_model,
+                "set the number of parameters for the baseline astrometric solution, either 5 (the default astrometric solution), 7, or 9 (which include acceleration and jerk terms)")
+        .def_prop_ro("n_baseline_params", [](RVGAIAmodel &m) { return m.get_n_baseline_params(); },
+                "how many baseline astrometric parameters are included the model")
 
 
         // priors
@@ -1145,7 +1283,15 @@ NB_MODULE(RVGAIAmodel, m) {
             [](RVGAIAmodel &m) { return m.individual_offset_prior; },
             [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.individual_offset_prior = vd; },
             "Common prior for the between-instrument offsets")
-            
+
+        .def_prop_rw("Ak_prior",
+            [](RVGAIAmodel &m) { return m.Ak_prior; },
+            [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.Ak_prior = vd; },
+            "Prior for the amplitudes of scan-angle dependent signals")
+        .def_prop_rw("thetak_prior",
+            [](RVGAIAmodel &m) { return m.thetak_prior; },
+            [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.thetak_prior = vd; },
+            "Prior for the phase of scan-angle dependent signals")
         .def_prop_rw("da_prior",
             [](RVGAIAmodel &m) { return m.da_prior; },
             [](RVGAIAmodel &m, distribution &d) { m.da_prior = d; },
@@ -1157,15 +1303,31 @@ NB_MODULE(RVGAIAmodel, m) {
         .def_prop_rw("mua_prior",
             [](RVGAIAmodel &m) { return m.mua_prior; },
             [](RVGAIAmodel &m, distribution &d) { m.mua_prior = d; },
-            "Prior for the proper-motion in right-ascension")
+            "Prior for the proper-motion in right-ascension (mas/yr)")
         .def_prop_rw("mud_prior",
             [](RVGAIAmodel &m) { return m.mud_prior; },
             [](RVGAIAmodel &m, distribution &d) { m.mud_prior = d; },
-            "Prior for the proper-motion in declination")
+            "Prior for the proper-motion in declination (mas/yr)")
         .def_prop_rw("parallax_prior",
             [](RVGAIAmodel &m) { return m.plx_prior; },
             [](RVGAIAmodel &m, distribution &d) { m.plx_prior = d; },
             "Prior for the parallax")
+        .def_prop_rw("accela_prior",
+            [](RVGAIAmodel &m) { return m.accela_prior; },
+            [](RVGAIAmodel &m, distribution &d) { m.accela_prior = d; },
+            "Prior for the proper-acceleration in right-ascension (mas/yr^2)")
+        .def_prop_rw("acceld_prior",
+            [](RVGAIAmodel &m) { return m.acceld_prior; },
+            [](RVGAIAmodel &m, distribution &d) { m.acceld_prior = d; },
+            "Prior for the proper-acceleration in declination (mas/yr^2)")
+        .def_prop_rw("jerka_prior",
+            [](RVGAIAmodel &m) { return m.jerka_prior; },
+            [](RVGAIAmodel &m, distribution &d) { m.jerka_prior = d; },
+            "Prior for the proper-jerk in right-ascension (mas/yr^3)")
+        .def_prop_rw("jerkd_prior",
+            [](RVGAIAmodel &m) { return m.jerkd_prior; },
+            [](RVGAIAmodel &m, distribution &d) { m.jerkd_prior = d; },
+            "Prior for the proper-jerk in declination (mas/yr^3)")
 
         // known object priors
         // ? should these setters check if known_object is true?
@@ -1173,17 +1335,17 @@ NB_MODULE(RVGAIAmodel, m) {
                      [](RVGAIAmodel &m) { return m.KO_Pprior; },
                      [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_Pprior = vd; },
                      "Prior for KO orbital period(s)")
-        .def_prop_rw("KO_a0prior",
-                     [](RVGAIAmodel &m) { return m.KO_a0prior; },
-                     [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_a0prior = vd; },
+        .def_prop_rw("KO_aprior",
+                     [](RVGAIAmodel &m) { return m.KO_aprior; },
+                     [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_aprior = vd; },
                      "Prior for KO mass(es) (M_sun)")
         .def_prop_rw("KO_eprior",
                      [](RVGAIAmodel &m) { return m.KO_eprior; },
                      [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_eprior = vd; },
                      "Prior for KO eccentricity(ies)")
-        .def_prop_rw("KO_omegaprior",
-                     [](RVGAIAmodel &m) { return m.KO_omegaprior; },
-                     [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_omegaprior = vd; },
+        .def_prop_rw("KO_wprior",
+                     [](RVGAIAmodel &m) { return m.KO_wprior; },
+                     [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_wprior = vd; },
                      "Prior for KO argument(s) of periastron")
         .def_prop_rw("KO_phiprior",
                      [](RVGAIAmodel &m) { return m.KO_phiprior; },
@@ -1193,9 +1355,9 @@ NB_MODULE(RVGAIAmodel, m) {
                      [](RVGAIAmodel &m) { return m.KO_cosiprior; },
                      [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_cosiprior = vd; },
                      "Prior for cosine of KO inclination(s)")
-        .def_prop_rw("KO_Omegaprior",
-                     [](RVGAIAmodel &m) { return m.KO_Omegaprior; },
-                     [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_Omegaprior = vd; },
+        .def_prop_rw("KO_Wprior",
+                     [](RVGAIAmodel &m) { return m.KO_Wprior; },
+                     [](RVGAIAmodel &m, std::vector<distribution>& vd) { m.KO_Wprior = vd; },
                      "Prior for KO longitude(s) of ascending node")
 
         // conditional object

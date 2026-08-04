@@ -8,41 +8,34 @@ on:
 jobs:
 
   build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: wheels ${{ matrix.os }} ${{ matrix.py }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        py: [cp39, cp310, cp311, cp312, cp313, cp314]
 
     steps:
       - uses: actions/checkout@v5
 
-      # - name: Build wheels
-      #   uses: pypa/cibuildwheel@v3.3.1
-      #   env:
-      #     # Skip 32-bit builds, musllinux builds, and disable building PyPy wheels on all platforms
-      #     CIBW_SKIP: "*-win32 *-manylinux_i686 *musllinux* pp*"
-      #     # Needed for full C++17 support
-      #     CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET='10.15'
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v3.4.1
+        env:
+          CIBW_BUILD: "${{ matrix.py }}-*"
+          # Needed for full C++17 support
+          CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET='10.15'
 
-      # # - uses: actions/setup-python@v5
-      # #   with:
-      # #     python-version: '3.10'
-
-      # # - name: Tilde
-      # #   run: |
-      # #     python metadata_tilde.py wheel
-
-      # - uses: actions/upload-artifact@v4
-      #   with:
-      #     name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
-      #     path: ./wheelhouse/*.whl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.py }}
+          path: wheelhouse/*.whl
 
   build_sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Build sdist
         run: pipx run build --sdist
@@ -51,10 +44,11 @@ jobs:
         run: |
           python metadata_tilde.py dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: cibw-sdist
+          name: sdist
           path: dist/*.tar.gz
+
 
   upload_pypi:
     name: Upload to PyPI
@@ -67,13 +61,26 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          # unpacks all CIBW artifacts into dist/
-          pattern: cibw-*
           path: dist
-          merge-multiple: true
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        # with:
-        #   repository-url: https://test.pypi.org/legacy/
+      - name: Test downloaded artifacts
+        run: |
+          ls dist/*
+
+      - name: Flatten artifact directories
+        run: |
+          mkdir final_dist
+          find dist -name "*.whl" -exec cp {} final_dist/ \;
+          find dist -name "*.tar.gz" -exec cp {} final_dist/ \;
+          ls final_dist
+
+      # - name: Check 
+      #   run: pipx run twine check final_dist/*.whl --strict
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: final_dist
+          # repository-url: https://test.pypi.org/legacy/

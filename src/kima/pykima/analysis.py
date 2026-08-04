@@ -87,6 +87,15 @@ def np_posterior_threshold(results: KimaResults, threshold: float = 0.9):
         above = (counts / results.ESS) > threshold
         return np.where(above, np.arange(values.size), 0).max(axis=1)
 
+def np_FIP_threshold(results: KimaResults, fip_threshold: float = 0.1):
+    from scipy.signal import find_peaks
+    T = results.priors['Pprior'].ppf(1)
+    if np.isinf(T):
+        T = np.ptp(results.data.t)
+    p, fip = FIP(results, plot=False, f_width=1 / T)
+    peaks, _ = find_peaks(1 - fip, height=1 - fip_threshold)
+    return peaks.size
+
 
 def compute_values_from_ratios(S, ratios):
     """
@@ -112,6 +121,32 @@ def compute_values_from_ratios(S, ratios):
     a1 = S / sum_T
     values = [a1 * t for t in terms]
     return values
+
+def compute_values_from_ratios_log(logS, ratios):
+    """
+    Given a value for the log of the sum logS and a list of ratios between
+    consecutive terms, returns the log of all terms a_1, a_2, ..., a_n.
+
+    Args:
+        logS (float): log of the sum S
+        ratios (list): ratios between consecutive terms
+
+    Returns:
+        list of log of values [log(a1), ..., log(an)]
+    """
+    from scipy.special import logsumexp
+    # Step 1: build log(T_i)
+    log_terms = [0.0]  # log(1)
+    for r in ratios:
+        log_terms.append(log_terms[-1] + np.log(r))
+
+    # Step 2: compute log(sum T_i)
+    log_sum_T = logsumexp(log_terms)
+
+    # Step 3: compute log(a1)
+    log_a1 = logS - log_sum_T
+
+    return [log_a1 + lt for lt in log_terms]
 
 
 def star_mass_samples(star_mass, star_mass_uncertainty, n):
@@ -725,23 +760,43 @@ def get_planet_mass_and_semimajor_axis(P, K, e, star_mass=1.0,
         (M, A) where
             M is the output of `get_planet_mass`
             A is the output of `get_planet_semimajor_axis`
-        star_mass (np.ndarray):
-            Gaussian samples if star_mass is a tuple or list
+        star_mass (float, np.ndarray):
+            Provided value of stellar mass or Gaussian samples if `star_mass` is
+            given as a tuple or list
     """
 
     if verbose:
         print('Using star mass = %s solar mass' % star_mass)
+
+    P = np.atleast_1d(P)
+    K = np.atleast_1d(K)
+    e = np.atleast_1d(e)
+
+    # check shapes
+    if P.shape != K.shape:
+        raise ValueError('P and K must have the same shape')
+    if P.shape != e.shape:
+        raise ValueError('P and e must have the same shape')
+
+    ndim1 = P.ndim == 1
+    if ndim1:
+        P = P[:, np.newaxis]
+        K = K[:, np.newaxis]
+        e = e[:, np.newaxis]
 
     if isinstance(star_mass, tuple) or isinstance(star_mass, list):
         # include (Gaussian) uncertainty on the stellar mass
         star_mass = star_mass_samples(*star_mass, P.shape[0])
         star_mass = np.repeat(star_mass.reshape(-1, 1), P.shape[1], axis=1)
 
-    mass = get_planet_mass(P, K, e, star_mass, full_output)
-    a = get_planet_semimajor_axis(P, K, star_mass, full_output)
-    if isinstance(star_mass, np.ndarray):
-        return mass, a, star_mass
-    return mass, a
+    mass = get_planet_mass(P, K, e, star_mass, full_output=full_output)
+    a = get_planet_semimajor_axis(P, K, star_mass, full_output=full_output)
+
+    if full_output and ndim1:
+        mass = mass[0], mass[1], mass[2].flatten()
+        a = a[0], a[1], a[2].flatten()
+
+    return mass, a, star_mass
 
 
 def get_planet_mass_and_semimajor_axis_accurate(P, K, e, I=None, star_mass=1.0,
@@ -771,6 +826,22 @@ def get_planet_mass_and_semimajor_axis_accurate(P, K, e, I=None, star_mass=1.0,
 
     if verbose:
         print('Using star mass = %s solar mass' % star_mass)
+
+    P = np.atleast_1d(P)
+    K = np.atleast_1d(K)
+    e = np.atleast_1d(e)
+
+    # check shapes
+    if P.shape != K.shape:
+        raise ValueError('P and K must have the same shape')
+    if P.shape != e.shape:
+        raise ValueError('P and e must have the same shape')
+
+    ndim1 = P.ndim == 1
+    if ndim1:
+        P = P[:, np.newaxis]
+        K = K[:, np.newaxis]
+        e = e[:, np.newaxis]
 
     if isinstance(star_mass, tuple) or isinstance(star_mass, list):
         if isinstance(P, float):
@@ -931,8 +1002,8 @@ def aliases(P):
 #     return bins, FIP
 
 
-def FIP(results, f_center=None, f_width=None, oversampling=5,
-        plot=True, show_peaks=True, peak_indices=None, include_aliases=False,
+def FIP(results, f_center=None, f_width=None, f_start=None, oversampling=5, 
+        plot=True, show_peaks=True, fip_threshold=0.1, peak_indices=None,
         include_known_object=False, include_transiting_planet=False,
         peak_ndigits=None, show_ESS=True, just_tip=False, ax=None, **kwargs):
     r"""
@@ -940,20 +1011,58 @@ def FIP(results, f_center=None, f_width=None, oversampling=5,
     on (weighted) posterior samples.
 
     Arguments:
-        results (KimaResults): A results instance
+        results (KimaResults):
+            A results instance
         f_center (ndarray, optional):
-            Array of (linear) frequencies at which to compute the T/FIP.
+            Array of (linear) frequencies at which to compute the TIP/FIP.
         f_width (float, optional):
             Width of the frequency bins.
+        f_start (float, optional):
+            Starting frequency of the frequency bins. Defaults to the prior
+            limit, if available, else the timespan of the data.
+        oversampling (int, optional):
+            Oversampling factor for the frequency bins.
+        plot (bool, optional):
+            Plot the TIP/FIP periodograms.
+        show_peaks (bool, optional):
+            Show prominent peaks in the TIP/FIP periodogram.
+        fip_threshold (float, optional):
+            FIP threshold for identifying peaks.
+        include_known_object (bool, optional):
+            Include known objects in the TIP/FIP calculation.
+        include_transiting_planet (bool, optional):
+            Include transiting planets in the TIP/FIP calculation.
+        peak_ndigits (int, optional):
+            Number of digits to show in the peak labels.
+        show_ESS (bool, optional):
+            Show the effective sample size in the plot.
+        just_tip (bool, optional):
+            Only plot the TIP periodogram.
+        ax (matplotlib.axes.Axes, optional):
+            Axis to plot on.
+        kwargs (dict, optional):
+            Keyword arguments to pass to the `ax.plot` method
+    
+    Returns:
+        P (ndarray):
+            The period bins
+        FIP (ndarray):
+            The false inclusion probability
+        (fig, axs):
+            The figure and axes, if `plot=True`
     """
-    if f_center is None and f_width is None:
-        Tobs = np.ptp(results.data.t)
+    Tobs = np.ptp(results.data.t)
+    if f_start is None:
+        prior_limit = results.priors['Pprior'].ppf(1)
+        if np.isinf(prior_limit):
+            f_start = 1.0 / Tobs
+        else:
+            f_start = 1.0 / prior_limit
+    if f_width is None:
         f_width = 1.0 / Tobs
-        f_center = np.arange(f_width, 1.0, f_width / oversampling)
-
     if f_center is None:
-        f_center = np.arange(f_width, 1.0, f_width / oversampling)
-
+        f_center = np.arange(f_start, 1.0, f_width / oversampling)
+    
     P = results.posteriors.P.copy()
 
     if include_known_object:
@@ -1012,7 +1121,7 @@ def FIP(results, f_center=None, f_width=None, oversampling=5,
         if show_peaks:
             ndigits = peak_ndigits or len(str(results.ESS))
 
-            peaks, _peaks_info = find_peaks(TIP, height=0.9)
+            peaks, _peaks_info = find_peaks(TIP, height=1 - fip_threshold)
             if peak_indices is not None:
                 peaks = peaks[peak_indices]
 
@@ -1141,7 +1250,7 @@ def true_within_hdi(results, truths, hdi_prob=0.95, only_periods=False,
 
             # if the argument of periastron is not fixed
             if 'Fixed' not in str(results.priors['wprior']):
-                wint = Interval(*hdi(results.Omega[mask], hdi_prob))
+                wint = Interval(*hdi(results.Omega[mask], hdi_prob)) #results.Omega doesnt exist anymore? Maybe?
                 w = truths[i][3]
                 found.append(w in wint)
                 within['w'] = w in wint
@@ -1302,38 +1411,130 @@ def reorder_P2(res, replace=False, passes=1):
         res.posterior_sample[:, res.indices['planets.e']] = new_posterior.e
         res.posterior_sample[:, res.indices['planets.w']] = new_posterior.w
         res.posterior_sample[:, res.indices['planets.φ']] = new_posterior.φ
-
-
-def reorder_P5(res, replace=False):
+def reorder_P5(res, replace=False, until_detected=True,
+               sort_maximum_likelihood_by_K=True):
     from itertools import permutations
     from copy import deepcopy
     from tqdm import tqdm
     from warnings import warn
     warn('this function does not change res.posterior_sample even if replace=True')
+
     # make a copy of the posterior samples
     new_posterior = deepcopy(res.posteriors)
     fields = ('e', 'w', 'φ',
               'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
     # the maximum likelihood sample will serve as reference
-    p = res.maximum_likelihood_sample()
+    p = res.maximum_likelihood_sample(printit=False)
 
-    for j in range(res.npmax - 1):
+    if sort_maximum_likelihood_by_K:
+        sortK = np.argsort(p[res.indices['planets.K']])[::-1]
+        p[res.indices['planets.P']] = p[res.indices['planets.P']][sortK]
+        p[res.indices['planets.K']] = p[res.indices['planets.K']][sortK]
+        p[res.indices['planets.e']] = p[res.indices['planets.e']][sortK]
+        p[res.indices['planets.w']] = p[res.indices['planets.w']][sortK]
+        p[res.indices['planets.φ']] = p[res.indices['planets.φ']][sortK]
+        if res.model is MODELS.RVHGPMmodel:
+            p[res.indices['planets.i']] = p[res.indices['planets.i']][sortK]
+            p[res.indices['planets.W']] = p[res.indices['planets.W']][sortK]
+            # p[res.indices['planets.Ω']] = p[res.indices['planets.Ω']][sortK]
+
+    res.print_sample(p)
+
+    # covariance estimation...
+    logL = res.posterior_lnlike[:, 1]
+    errorP = new_posterior.P[logL > np.percentile(logL, 84)].std(axis=0)
+    errorK = new_posterior.K[logL > np.percentile(logL, 84)].std(axis=0)
+
+    # do reordering for all planets or until detected
+    maximum = np_bayes_factor_threshold(res) if until_detected else res.npmax - 1
+
+    for j in range(maximum):
         # all possible permutations of the columns after the jth
         perms = list(map(np.array, permutations(range(j, res.npmax))))
         # reference period and semi-amplitude
         refP = p[res.indices['planets.P']][j]
         refK = p[res.indices['planets.K']][j]
         # for each sample
-        for i, (sP, sK) in enumerate(tqdm(zip(new_posterior.P, new_posterior.K))):
+        for i, (sP, sK) in enumerate(tqdm(zip(new_posterior.P, new_posterior.K), total=res.ESS)):
             sP = sP[j:]
             sK = sK[j:]
             dist = [
-                np.hypot((sP[perm - j] - refP)[0], (sK[perm - j] - refK)[0])
+                np.hypot(
+                    (sP[perm - j] - refP)[0] / errorP[j],
+                    (sK[perm - j] - refK)[0] / errorK[j]
+                )
                 for perm in perms
             ]
             perm = perms[np.argmin(np.abs(dist))]
             new_posterior.P[i, j:] = sP[perm - j]
             new_posterior.K[i, j:] = sK[perm - j]
+            for field in fields:
+                try:
+                    arr = getattr(new_posterior, field)
+                    arr[i, j:] = arr[i, j:][perm - j]
+                except AttributeError:
+                    pass
+    if replace:
+        res.posteriors = new_posterior
+
+    return new_posterior
+
+def reorder_P5_ast(res, replace=False, until_detected=True,
+               sort_maximum_likelihood_by_a=True, printit=False):
+    from itertools import permutations
+    from copy import deepcopy
+    from tqdm import tqdm
+    from warnings import warn
+    # warn('this function does not change res.posterior_sample even if replace=True') #I believe it does replace
+
+    # make a copy of the posterior samples
+    new_posterior = deepcopy(res.posteriors)
+    fields = ('e', 'w', 'φ',
+              'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg', 'cosi', 'A','B','F','G')
+    # the maximum likelihood sample will serve as reference
+    p = res.maximum_likelihood_sample(printit=False)
+
+    if sort_maximum_likelihood_by_a:
+        sorta = np.argsort(p[res.indices['planets.a']])[::-1]
+        p[res.indices['planets.P']] = p[res.indices['planets.P']][sorta]
+        p[res.indices['planets.a']] = p[res.indices['planets.a']][sorta]
+        p[res.indices['planets.e']] = p[res.indices['planets.e']][sorta]
+        p[res.indices['planets.w']] = p[res.indices['planets.w']][sorta]
+        p[res.indices['planets.W']] = p[res.indices['planets.W']][sorta]
+        p[res.indices['planets.φ']] = p[res.indices['planets.φ']][sorta]
+        p[res.indices['planets.cosi']] = p[res.indices['planets.cosi']][sorta]
+
+    if printit:
+        res.print_sample(p)
+
+    # covariance estimation...
+    logL = res.posterior_lnlike[:, 1]
+    errorP = new_posterior.P[logL > np.percentile(logL, 84)].std(axis=0)
+    errora = new_posterior.a[logL > np.percentile(logL, 84)].std(axis=0)
+
+    # do reordering for all planets or until detected
+    maximum = np_bayes_factor_threshold(res) if until_detected else res.npmax - 1
+
+    for j in range(maximum):
+        # all possible permutations of the columns after the jth
+        perms = list(map(np.array, permutations(range(j, res.npmax))))
+        # reference period and semi-amplitude
+        refP = p[res.indices['planets.P']][j]
+        refa = p[res.indices['planets.a']][j]
+        # for each sample
+        for i, (sP, sa) in enumerate(tqdm(zip(new_posterior.P, new_posterior.a), total=res.ESS)):
+            sP = sP[j:]
+            sa = sa[j:]
+            dist = [
+                np.hypot(
+                    (sP[perm - j] - refP)[0] / errorP[j],
+                    (sa[perm - j] - refa)[0] / errora[j]
+                )
+                for perm in perms
+            ]
+            perm = perms[np.argmin(np.abs(dist))]
+            new_posterior.P[i, j:] = sP[perm - j]
+            new_posterior.a[i, j:] = sa[perm - j]
             for field in fields:
                 try:
                     arr = getattr(new_posterior, field)
@@ -1484,7 +1685,8 @@ def find_outliers(results, sample, threshold=10, full_output=False):
     elif J.shape[0] > 1:
         # one jitter per instrument
         J = J[(res.data.obs - 1).astype(int)]
-
+    if res.model is MODELS.ETVmodel:
+        J = J/(24*3600)
     nu = sample[res.indices['nu']]
 
     # probabilities within the Gaussian and Student-t likelihoods
@@ -1575,8 +1777,8 @@ def detection_limits(results, star_mass: Union[float, Tuple] = 1.0,
     K = K[inds]
     E = E[inds]
 
-    M, A = get_planet_mass_and_semimajor_axis(P, K, E, star_mass=star_mass,
-                                              full_output=True)
+    M, A, _ = get_planet_mass_and_semimajor_axis(P, K, E, star_mass=star_mass,
+                                                 full_output=True)
     M = M[2]
     A = A[2]
 
@@ -1988,8 +2190,7 @@ def full_model_table(res, sample, instruments=None, star_mass=1.0):
             sm = star_mass[0]
         else:
             sm = star_mass
-        _Mpar, _Apar = get_planet_mass_and_semimajor_axis(
-            _P, _K, _ecc, star_mass=sm)
+        _Mpar, _Apar, _ = get_planet_mass_and_semimajor_axis(_P, _K, _ecc, star_mass=sm)
         _Mpar = _Mpar[1]
 
         _M = get_planet_mass(isamples[:, 0], isamples[:, 1], isamples[:, 3],
