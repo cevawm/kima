@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <ostream>
 #include <streambuf>
@@ -85,8 +86,9 @@ Args:
                 unsigned int new_level_interval=2000,   \
                 unsigned int save_interval=100,         \
                 unsigned int thread_steps=10,           \
-                unsigned int max_num_levels=0,          \
-                double lambda_=10.0, double beta=100.0, \
+                int max_num_levels=0,                   \
+                double lambda_=10.0,                    \
+                double beta=100.0,                      \
                 double compression=exp(1.0),            \
                 unsigned int seed=0,                    \
                 unsigned int print_thin=50,             \
