@@ -90,6 +90,7 @@ Args:
                 double lambda_=10.0,                    \
                 double beta=100.0,                      \
                 double compression=exp(1.0),            \
+                double target_loglikelihood=inf,        \
                 unsigned int seed=0,                    \
                 unsigned int print_thin=50,             \
                 bool progress=false)
@@ -98,7 +99,8 @@ Args:
 
 #define RUN_BODY(name) \
     const auto opt = Options(num_particles, new_level_interval, save_interval,          \
-                             thread_steps, max_num_levels, lambda_, beta, steps);       \
+                             thread_steps, max_num_levels, lambda_, beta, steps,        \
+                             target_loglikelihood);                                     \
     Sampler<name> sampler(num_threads, compression, opt, true);                         \
     auto ns = static_cast<unsigned int>(sampler.size());                                \
     for (unsigned int i = 0; i < ns; i++)                                               \
@@ -123,7 +125,8 @@ Args:
     "m"_a, "steps"_a=100, "num_threads"_a=1, "num_particles"_a=1,            \
     "new_level_interval"_a=2000, "save_interval"_a=100, "thread_steps"_a=10, \
     "max_num_levels"_a=0, "lambda_"_a=10.0, "beta"_a=100.0,                  \
-    "compression"_a=exp(1.0), "seed"_a=0, "print_thin"_a=50,                 \
+    "compression"_a=exp(1.0), "target_loglikelihood"_a=inf,                  \
+    "seed"_a=0, "print_thin"_a=50,                                           \
     "progress"_a=false
 
 
