@@ -97,7 +97,7 @@ Args:
 #define RUN_BODY(name) \
     const auto opt = Options(num_particles, new_level_interval, save_interval,          \
                              thread_steps, max_num_levels, lambda_, beta, steps);       \
-    Sampler<name> sampler(num_threads, compression, opt, true, false);                  \
+    Sampler<name> sampler(num_threads, compression, opt, true);                         \
     auto ns = static_cast<unsigned int>(sampler.size());                                \
     for (unsigned int i = 0; i < ns; i++)                                               \
     {                                                                                   \
