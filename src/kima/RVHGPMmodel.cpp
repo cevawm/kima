@@ -282,12 +282,15 @@ void RVHGPMmodel::calculate_mu()
 
     // Zero the signal
     mu_pm.assign(mu_pm.size(), 0.0);
-    mu_pm[0] += pm_ra_bary; // barycenter
-    mu_pm[1] += pm_dec_bary;
-    mu_pm[2] += pm_ra_bary;
-    mu_pm[3] += pm_dec_bary;
-    mu_pm[4] += pm_ra_bary;
-    mu_pm[5] += pm_dec_bary;
+
+    if (!marginalise_barycenter) {
+        mu_pm[0] += pm_ra_bary; // barycenter
+        mu_pm[1] += pm_dec_bary;
+        mu_pm[2] += pm_ra_bary;
+        mu_pm[3] += pm_dec_bary;
+        mu_pm[4] += pm_ra_bary;
+        mu_pm[5] += pm_dec_bary;
+    }
 
     if(!update) // not updating, means recalculate everything
     {
@@ -712,8 +715,11 @@ double RVHGPMmodel::perturb(RNG& rng)
             }
         }
 
-        logH += pm_ra_bary_prior->perturb(pm_ra_bary, rng);
-        logH += pm_dec_bary_prior->perturb(pm_dec_bary, rng);
+        if (!marginalise_barycenter) {
+            logH += pm_ra_bary_prior->perturb(pm_ra_bary, rng);
+            logH += pm_dec_bary_prior->perturb(pm_dec_bary, rng);
+        }
+
         logH += parallax_prior->perturb(parallax, rng);
 
         calculate_mu();
@@ -785,13 +791,6 @@ double RVHGPMmodel::log_likelihood() const
             logL += c_nu - 0.5*log(var) - 0.5*(nu + 1.)*log(1. + pow(y[i] - mu[i], 2)/var/nu);
         }
 
-        auto like_hip = DNest4::BivariateGaussian(mu_pm[0], mu_pm[1], pm_data.sig_hip_ra, pm_data.sig_hip_dec, pm_data.rho_hip);
-        auto like_gaia = DNest4::BivariateGaussian(mu_pm[2], mu_pm[3], pm_data.sig_gaia_ra, pm_data.sig_gaia_dec, pm_data.rho_gaia);
-        auto like_hg = DNest4::BivariateGaussian(mu_pm[4], mu_pm[5], pm_data.sig_hg_ra, pm_data.sig_hg_dec, pm_data.rho_hg);
-        logL += like_hip.log_pdf(pm_data.pm_ra_hip, pm_data.pm_dec_hip);
-        logL += like_gaia.log_pdf(pm_data.pm_ra_gaia, pm_data.pm_dec_gaia);
-        logL += like_hg.log_pdf(pm_data.pm_ra_hg, pm_data.pm_dec_hg);
-
     }
 
     else{
@@ -815,6 +814,12 @@ double RVHGPMmodel::log_likelihood() const
             logL += - halflog2pi - 0.5*log(var) - 0.5*(pow(y[i] - mu[i], 2)/var);
         }
 
+    }
+
+    if (marginalise_barycenter) {
+        logL += marginalised_barycenter_log_likelihood();
+    }
+    else {
         auto like_hip = DNest4::BivariateGaussian(mu_pm[0], mu_pm[1], pm_data.sig_hip_ra, pm_data.sig_hip_dec, pm_data.rho_hip);
         auto like_gaia = DNest4::BivariateGaussian(mu_pm[2], mu_pm[3], pm_data.sig_gaia_ra, pm_data.sig_gaia_dec, pm_data.rho_gaia);
         auto like_hg = DNest4::BivariateGaussian(mu_pm[4], mu_pm[5], pm_data.sig_hg_ra, pm_data.sig_hg_dec, pm_data.rho_hg);
@@ -839,6 +844,104 @@ double RVHGPMmodel::log_likelihood() const
     #endif
 
     return logL;
+}
+
+
+double RVHGPMmodel::marginalised_barycenter_log_likelihood() const
+{
+    // Accumulators for 2x2 Matrix A, 2D vector b, and baseline chi2
+    double A00 = 0.0, A01 = 0.0, A11 = 0.0;
+    double b0 = 0.0, b1 = 0.0;
+    double chi2_0 = 0.0;
+
+    double r_ra, r_dec;
+    double var_ra, var_dec, cov;
+    double detC, invC00, invC01, invC11;
+
+    // Hipparcos
+    r_ra = pm_data.pm_ra_hip - mu_pm[0];
+    r_dec = pm_data.pm_dec_hip - mu_pm[1];
+    var_ra = pm_data.sig_hip_ra * pm_data.sig_hip_ra;
+    var_dec = pm_data.sig_hip_dec * pm_data.sig_hip_dec;
+    cov = pm_data.rho_hip * pm_data.sig_hip_ra * pm_data.sig_hip_dec;
+    detC = var_ra * var_dec - cov * cov;
+    invC00 =  var_dec / detC;
+    invC01 = -cov     / detC;
+    invC11 =  var_ra  / detC;
+    // accumulate
+    A00 += invC00;
+    A01 += invC01;
+    A11 += invC11;
+    b0 += invC00 * r_ra + invC01 * r_dec;
+    b1 += invC01 * r_ra + invC11 * r_dec;
+    chi2_0 += r_ra * (invC00 * r_ra + invC01 * r_dec) + r_dec * (invC01 * r_ra + invC11 * r_dec);
+
+
+    // Gaia
+    r_ra = pm_data.pm_ra_gaia - mu_pm[2];
+    r_dec = pm_data.pm_dec_gaia - mu_pm[3];
+    var_ra = pm_data.sig_gaia_ra * pm_data.sig_gaia_ra;
+    var_dec = pm_data.sig_gaia_dec * pm_data.sig_gaia_dec;
+    cov = pm_data.rho_gaia * pm_data.sig_gaia_ra * pm_data.sig_gaia_dec;
+    detC = var_ra * var_dec - cov * cov;
+    invC00 =  var_dec / detC;
+    invC01 = -cov     / detC;
+    invC11 =  var_ra  / detC;
+    // accumulate
+    A00 += invC00;
+    A01 += invC01;
+    A11 += invC11;
+    b0 += invC00 * r_ra + invC01 * r_dec;
+    b1 += invC01 * r_ra + invC11 * r_dec;
+    chi2_0 += r_ra * (invC00 * r_ra + invC01 * r_dec) + r_dec * (invC01 * r_ra + invC11 * r_dec);
+
+
+    // Hipparcos-Gaia
+    r_ra = pm_data.pm_ra_hg - mu_pm[4];
+    r_dec = pm_data.pm_dec_hg - mu_pm[5];
+    var_ra = pm_data.sig_hg_ra * pm_data.sig_hg_ra;
+    var_dec = pm_data.sig_hg_dec * pm_data.sig_hg_dec;
+    cov = pm_data.rho_hg * pm_data.sig_hg_ra * pm_data.sig_hg_dec;
+    detC = var_ra * var_dec - cov * cov;
+    invC00 =  var_dec / detC;
+    invC01 = -cov     / detC;
+    invC11 =  var_ra  / detC;
+    // accumulate
+    A00 += invC00;
+    A01 += invC01;
+    A11 += invC11;
+    b0 += invC00 * r_ra + invC01 * r_dec;
+    b1 += invC01 * r_ra + invC11 * r_dec;
+    chi2_0 += r_ra * (invC00 * r_ra + invC01 * r_dec) + r_dec * (invC01 * r_ra + invC11 * r_dec);
+
+    // Determinant and inverse of 2x2 matrix A
+    double detA = A00 * A11 - A01 * A01;
+    double invA00 =  A11 / detA;
+    double invA01 = -A01 / detA;
+    double invA11 =  A00 / detA;
+
+    // Quadratic correction: b^T * A^{-1} * b
+    double b_invA_b = b0 * (invA00 * b0 + invA01 * b1) 
+                    + b1 * (invA01 * b0 + invA11 * b1);
+
+    // Effective Chi-Squared after marginalization
+    double chi2_eff = chi2_0 - b_invA_b;
+
+    // Marginalised Log-Likelihood: -0.5 * chi2_eff - 0.5 * ln(det(A))
+    double logL_marg = -0.5 * chi2_eff - 0.5 * log(detA);
+
+    // To sample from the conditional posterior
+    // // Mean vector: x_hat = A^{-1} * b
+    // mean_ra  = invA00 * b0 + invA01 * b1;
+    // mean_dec = invA01 * b0 + invA11 * b1;
+    // // Cholesky decomposition of A^{-1} = L * L^T
+    // // L = [ L00   0  ]
+    // //     [ L10  L11 ]
+    // L00 = std::sqrt(invA00);
+    // L10 = invA01 / L00;
+    // L11 = std::sqrt(invA11 - L10 * L10);
+
+    return logL_marg;
 }
 
 
@@ -1208,6 +1311,7 @@ class RVHGPMmodel_publicist : public RVHGPMmodel
         using RVHGPMmodel::indicator_correlations;
         using RVHGPMmodel::jitter_propto_indicator;
         using RVHGPMmodel::jitter_propto_indicator_index;
+        using RVHGPMmodel::marginalise_barycenter;
 };
 
 
@@ -1278,6 +1382,9 @@ NB_MODULE(RVHGPMmodel, m) {
                 "docs")
         .def_rw("jitter_propto_indicator_index", &RVHGPMmodel_publicist::jitter_propto_indicator_index, 
                 "docs")
+
+        .def_rw("marginalise_barycenter", &RVHGPMmodel_publicist::marginalise_barycenter, 
+                "Analytically marginalise the barycenter proper motion mu_ra, mu_dec")
 
         // // to un/pickle RVHGPMmodel
         // .def("__getstate__", [](const RVHGPMmodel &m)
