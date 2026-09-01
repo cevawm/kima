@@ -4164,10 +4164,14 @@ def hist_bary(res, show_prior=False):
     axs[2].hist(res.posteriors.plx, label=estimate + units[1], **hist_kw)
 
     if show_prior:
+        if hasattr(res, 'marginalise_barycenter') and res.marginalise_barycenter:
+            warnings.warn('marginalise_barycenter=True, pm_ra_bary_prior and pm_dec_bary_prior are ignored!')
         prior = res.priors['pm_ra_bary_prior']
         axs[0].hist(distribution_rvs(prior, size=res.ESS), label='prior', **hist_prior_kw)
         prior = res.priors['pm_dec_bary_prior']
         axs[1].hist(distribution_rvs(prior, size=res.ESS), label='prior', **hist_prior_kw)
+        prior = res.priors['parallax_prior']
+        axs[2].hist(distribution_rvs(prior, size=res.ESS), label='prior', **hist_prior_kw)
 
     for ax in axs:
         ax.legend()
