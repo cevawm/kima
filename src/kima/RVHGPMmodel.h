@@ -55,6 +55,8 @@ class KIMA_API RVHGPMmodel
         bool jitter_propto_indicator = false;
         int jitter_propto_indicator_index = 0;
 
+        bool marginalise_barycenter = false;
+
         RVData data;
         HGPMdata pm_data;
 
@@ -298,6 +300,9 @@ class KIMA_API RVHGPMmodel
 
         /// @brief log-likelihood function
         double log_likelihood() const;
+
+        /// @brief log-likelihood function after marginalizing over the barycenter proper motion
+        double marginalised_barycenter_log_likelihood() const;
 
         // Print parameters to stream
         void print(std::ostream& out) const;

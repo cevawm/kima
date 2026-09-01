@@ -882,6 +882,7 @@ class KimaResults:
 
         if self.model is MODELS.RVHGPMmodel:
             self._read_pm()
+            self.marginalise_barycenter = model.marginalise_barycenter
 
         if self.model in (MODELS.RVFWHMmodel, MODELS.RVFWHMRHKmodel):
             self.cfwhm = self.posterior_sample[:, self._current_column]
@@ -1141,6 +1142,11 @@ class KimaResults:
         self.indices['pm_dec_bary'] = self._current_column + 1
         self.indices['parallax'] = self._current_column + 2
         self._current_column += 3
+        if self.marginalise_barycenter:
+            x = self.sample_barycenter_pm_postprocess()
+            # TODO: is this the best place to do this?
+            self.posterior_sample[:, self.indices['pm_ra_bary']] = x[:, 0]
+            self.posterior_sample[:, self.indices['pm_dec_bary']] = x[:, 1]
 
     @property
     def _GP_par_indices(self):
@@ -3793,6 +3799,111 @@ class KimaResults:
                 v += np.take(offsets, ii)
 
         return v
+
+
+
+    def eval_model_hgpm(self, sample):
+        # TODO: this is a draft implementation!
+        from ..kepler import keplerian_rvpm
+        t_pm = np.array([
+            self.pm_data.epoch_ra_hip,
+            self.pm_data.epoch_dec_hip,
+            self.pm_data.epoch_ra_gaia,
+            self.pm_data.epoch_dec_gaia
+        ])
+        t_ra = t_pm[0::2]
+        t_dec = t_pm[1::2]
+
+        model_ra = np.zeros_like(t_ra)
+        model_dec = np.zeros_like(t_dec)
+        model_ra_hg = 0.0
+        model_dec_hg = 0.0
+
+        for j in range(int(sample[self.indices['np']])):
+            model = keplerian_rvpm(
+                [], t_pm, 
+                sample[self.indices['parallax']], 
+                sample[self.indices['planets.P']][j], 
+                sample[self.indices['planets.K']][j],
+                sample[self.indices['planets.e']][j],
+                sample[self.indices['planets.w']][j],
+                sample[self.indices['planets.φ']][j],
+                self.M0_epoch, 
+                sample[self.indices['planets.i']][j],
+                sample[self.indices['planets.W']][j]
+            )
+            model_ra += model[1]
+            model_dec += model[2]
+            model_ra_hg += model[3][0]
+            model_dec_hg += model[3][1]
+
+        model_ra = np.r_[model_ra, model_ra_hg]
+        model_dec = np.r_[model_dec, model_dec_hg]
+        return model_ra, model_dec
+
+    def sample_barycenter_pm_postprocess(self):
+        """
+        Reconstructs M samples of [μ_ra, μ_dec] from the conditional posterior,
+        after they were marginalised out.
+            
+        Returns:
+        --------
+        x_samples : np.ndarray, shape (M, 2)
+            Reconstructed barycenter proper motion samples [μ_ra, μ_dec].
+        """
+        pm_data = self.pm_data
+        D = np.array([
+            [pm_data.pm_ra_hip, pm_data.pm_ra_gaia, pm_data.pm_ra_hg], 
+            [pm_data.pm_dec_hip, pm_data.pm_dec_gaia, pm_data.pm_dec_hg]
+        ])
+        sig_ra = np.array([pm_data.sig_hip_ra, pm_data.sig_gaia_ra, pm_data.sig_hg_ra])
+        sig_dec = np.array([pm_data.sig_hip_dec, pm_data.sig_gaia_dec, pm_data.sig_hg_dec])
+        rho = np.array([pm_data.rho_hip, pm_data.rho_gaia, pm_data.rho_hg])
+
+        model = np.apply_along_axis(self.eval_model_hgpm, 1, self.posterior_sample)
+
+        residuals = D - model
+
+        # residuals : np.ndarray, shape (M, 2, 3)
+        #     Array of residuals (data - model) for M posterior samples, 
+        #     2 components (RA*, Dec), and 3 measurements (H, G, HG).
+
+        M = residuals.shape[0]
+
+        # build the 2x2 inverse covariance matrices (C_inv) for the 3 measurements
+        C_inv_all = np.zeros((3, 2, 2))
+        for i in range(3):
+            var_ra = sig_ra[i]**2
+            var_dec = sig_dec[i]**2
+            cov = rho[i] * sig_ra[i] * sig_dec[i]
+            
+            C = np.array([[var_ra, cov], 
+                        [cov, var_dec]])
+            C_inv_all[i] = np.linalg.inv(C)
+
+        # compute A = sum(C_i^{-1}) across all 3 measurements -> shape (2, 2)
+        A = np.sum(C_inv_all, axis=0)
+        
+        # covariance matrix for x and its Cholesky decomposition L
+        cov_x = np.linalg.inv(A)          # shape (2, 2)
+        L = np.linalg.cholesky(cov_x)     # shape (2, 2)
+
+        # compute b for each sample m: b_m = sum_i( C_i^{-1} * r_{i, m} )
+        # using einsum over measurements (i) and spatial dimensions (j, k)
+        # C_inv_all: (3, j, k), residuals: (M, k, 3) -> b: (M, j)
+        b = np.einsum('ijk, mki -> mj', C_inv_all, residuals)
+
+        # compute mean x_hat for each sample: x_hat = b * (A^{-1})^T -> shape (M, 2)
+        x_hat = b @ cov_x.T
+
+        # draw standard normal noise z ~ N(0, I) for all M samples -> shape (M, 2)
+        z = np.random.normal(loc=0.0, scale=1.0, size=(M, 2))
+
+        # transform noise using Cholesky factor L: x = x_hat + z * L^T
+        x_samples = x_hat + (z @ L.T)
+
+        return x_samples
+
 
     def individual_logZ(self):
         """
