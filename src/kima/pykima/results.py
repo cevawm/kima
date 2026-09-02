@@ -881,8 +881,8 @@ class KimaResults:
             self.studentt = False
 
         if self.model is MODELS.RVHGPMmodel:
-            self._read_pm()
             self.marginalise_barycenter = model.marginalise_barycenter
+            self._read_pm()
 
         if self.model in (MODELS.RVFWHMmodel, MODELS.RVFWHMRHKmodel):
             self.cfwhm = self.posterior_sample[:, self._current_column]
