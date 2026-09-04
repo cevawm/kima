@@ -49,45 +49,44 @@ def cli_run():
     args = parser.parse_args()
     print(args)
 
-    match args.command:
-        case 'file':
-            print('file')
-        case 'star':
-            try:
-                from arvi import RV
-            except ModuleNotFoundError:
-                msg = 'arvi (https://github.com/j-faria/arvi) must be installed to run kima on a star'
-                print(f'ModuleNotFoundError: {msg}')
-                sys.exit(1)
+    if args.command == 'file':
+        print('file')
+    elif args.command == 'star':
+        try:
+            from arvi import RV
+        except ModuleNotFoundError:
+            msg = 'arvi (https://github.com/j-faria/arvi) must be installed to run kima on a star'
+            print(f'ModuleNotFoundError: {msg}')
+            sys.exit(1)
 
-            print(f'Querying DACE for {args.star}...')
-            try:
-                s = RV(args.star, instrument=args.inst,
-                    do_adjust_means=False, verbose=False)
-            except ValueError as e:
-                print(f'Error: {e}')
-                sys.exit(1)
+        print(f'Querying DACE for {args.star}...')
+        try:
+            s = RV(args.star, instrument=args.inst,
+                do_adjust_means=False, verbose=False)
+        except ValueError as e:
+            print(f'Error: {e}')
+            sys.exit(1)
 
-            s.remove_instrument('HARPS', strict=True)
+        s.remove_instrument('HARPS', strict=True)
 
-            print(f'--> {s}')
+        print(f'--> {s}')
 
-            if s.mtime.size == 1:
-                print('Error: only one observation. Stopping.')
-                sys.exit(1)
+        if s.mtime.size == 1:
+            print('Error: only one observation. Stopping.')
+            sys.exit(1)
 
-            with tempfile.TemporaryDirectory() as tmpdir:
-                print(f'Writing data files and running kima in {tmpdir}')
-                files = s.save(directory=tmpdir)
-                files = [os.path.join(tmpdir, f) for f in files]
-                data = RVData(files, skip=2)
-                model = RVmodel(fix=args.fix, npmax=args.npmax, data=data)
-                model.directory = tmpdir
-                with chdir(model.directory):
-                    kima.run(model, steps=args.steps, num_threads=args.threads)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            print(f'Writing data files and running kima in {tmpdir}')
+            files = s.save(directory=tmpdir)
+            files = [os.path.join(tmpdir, f) for f in files]
+            data = RVData(files, skip=2)
+            model = RVmodel(fix=args.fix, npmax=args.npmax, data=data)
+            model.directory = tmpdir
+            with chdir(model.directory):
+                kima.run(model, steps=args.steps, num_threads=args.threads)
 
-                res = kima.load_results(model, diagnostic=args.diagnostic)
-                res.save_pickle(filename=args.output)
+            res = kima.load_results(model, diagnostic=args.diagnostic)
+            res.save_pickle(filename=args.output)
 
 
 
