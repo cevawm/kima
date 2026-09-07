@@ -2697,6 +2697,8 @@ class KimaResults:
                 else:
                     pars = ['P', 'K', 'M0', 'e', 'w', 'wdot','cosi']
                     extra_n = 2
+            elif self.model is MODELS.RVHGPMmodel:
+                pars = ('P', 'K', 'M0', 'e', 'w', 'i', 'W')
             else:
                 pars = ('P', 'K', 'M0', 'e', 'w')
             print(((self.n_dimensions + extra_n) * ' {:>10s} ').format(*pars))
