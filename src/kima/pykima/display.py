@@ -4174,7 +4174,7 @@ def plot_hgpm(res, pm_data, ncurves=50, normalize=False,
                 axs[0].plot(t_ra - 5e4, KO_model_ra + pm_ra_bary, label = "known object", **kw)
                 axs[2].plot(t_dec - 5e4, KO_model_dec + pm_dec_bary, **kw)
             else:
-                axs[0].plot(t_ra - 5e4, pm_ra_bary + KO_model_ra, **kw)
+                axs[0].plot(t_ra - 5e4, pm_ra_bary + KO_model_ra, label = "known object", **kw)
                 axs[2].plot(t_dec - 5e4, pm_dec_bary + KO_model_dec, **kw)
 
             
