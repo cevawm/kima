@@ -4186,8 +4186,12 @@ def plot_hgpm(res, pm_data, ncurves=50, normalize=False,
     # add the "known object" label to the legend
     # alongside the Hipparcos/Gaia labels created in plot_HGPMdata
     if include_known_object and res.KO and axs[0].get_legend() is not None:
-        axs[0].legend(ncols=2, bbox_to_anchor=(0, 1.11), loc='upper left')
-
+        leg = axs[0].legend(ncols=3, bbox_to_anchor=(0, 1.11), loc='upper left')
+        # increasing the opacity of the "known object" legend entry so it is more visible
+        for handle, text in zip(leg.legend_handles, leg.get_texts()):
+            if text.get_text() == 'known object':
+                handle.set_alpha(0.5)
+                
     return fig
 
 
