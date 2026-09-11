@@ -4169,10 +4169,9 @@ def plot_hgpm(res, pm_data, ncurves=50, normalize=False,
 
 
             kw = dict(color='C0', alpha=0.1 if ncurves > 10 else 1.0, zorder=-1, lw=0.5)
-            kw_line = dict(ls='--', color='tomato', alpha=0.1)
 
             if normalize:
-                axs[0].plot(t_ra - 5e4, KO_model_ra + pm_ra_bary, **kw)
+                axs[0].plot(t_ra - 5e4, KO_model_ra + pm_ra_bary, label = "known object", **kw)
                 axs[2].plot(t_dec - 5e4, KO_model_dec + pm_dec_bary, **kw)
             else:
                 axs[0].plot(t_ra - 5e4, pm_ra_bary + KO_model_ra, **kw)
