@@ -2219,7 +2219,7 @@ class KimaResults:
                 self.posteriors.KO.e = self.KOpars[:, range(3*self.nKO, 4*self.nKO)]
                 self.posteriors.KO.w = self.KOpars[:, range(4*self.nKO, 5*self.nKO)]
                 self.posteriors.KO.i = self.KOpars[:, range(5*self.nKO, 6*self.nKO)]
-                self.posteriors.KO.W = self.KOpars[:, range(6*self.nKO, 7*self.nKO)]
+                self.posteriors.KO.W = self.posteriors.KO.Ω = self.KOpars[:, range(6*self.nKO, 7*self.nKO)]
             else:
                 self.posteriors.KO.K = self.KOpars[:, range(1*self.nKO, 2*self.nKO)]
                 self.posteriors.KO.φ = self.KOpars[:, range(2*self.nKO, 3*self.nKO)]
