@@ -4095,7 +4095,7 @@ def plot_hgpm(res, pm_data, ncurves=50, normalize=False,
     # handles, labels = axs[0].get_legend_handles_labels()
     # print(handles)
 
-    for i in np.random.choice(np.arange(res.ESS), size=ncurves, replace=False):
+    for icurve, i in enumerate(np.random.choice(np.arange(res.ESS), size=ncurves, replace=False)):
     # for i in range(res.ESS):
         p = res.posterior_sample[i]
 
@@ -4169,19 +4169,25 @@ def plot_hgpm(res, pm_data, ncurves=50, normalize=False,
 
 
             kw = dict(color='C0', alpha=0.1 if ncurves > 10 else 1.0, zorder=-1, lw=0.5)
+            label = 'known object' if icurve == 0 else None
 
             if normalize:
-                axs[0].plot(t_ra - 5e4, KO_model_ra + pm_ra_bary, label = "known object", **kw)
+                axs[0].plot(t_ra - 5e4, KO_model_ra + pm_ra_bary, label=label, **kw)
                 axs[2].plot(t_dec - 5e4, KO_model_dec + pm_dec_bary, **kw)
             else:
-                axs[0].plot(t_ra - 5e4, pm_ra_bary + KO_model_ra, label = "known object", **kw)
+                axs[0].plot(t_ra - 5e4, pm_ra_bary + KO_model_ra, label=label, **kw)
                 axs[2].plot(t_dec - 5e4, pm_dec_bary + KO_model_dec, **kw)
 
             
     for ax in axs[::2]:
         ax.set_xlim(-4000, 10_000)
         # ax.set_ylim(-40, 40)
-    
+
+    # add the "known object" label to the legend
+    # alongside the Hipparcos/Gaia labels created in plot_HGPMdata
+    if include_known_object and res.KO and axs[0].get_legend() is not None:
+        axs[0].legend(ncols=2, bbox_to_anchor=(0, 1.11), loc='upper left')
+
     return fig
 
 
