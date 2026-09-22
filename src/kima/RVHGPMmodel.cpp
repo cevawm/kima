@@ -294,7 +294,12 @@ void RVHGPMmodel::calculate_mu()
 
     if(!update) // not updating, means recalculate everything
     {
-        mu.assign(mu.size(), background);
+        if (!marginalize_C){
+            mu.assign(mu.size(), background);
+        }
+        else {
+            mu.assign(mu.size(), 0.0);
+        }
 
         staleness = 0;
         if(trend)
@@ -689,7 +694,9 @@ double RVHGPMmodel::perturb(RNG& rng)
     else
     {
         // propose new vsys
-        logH += Cprior->perturb(background, rng);
+        if (!marginalize_C) {
+            logH += Cprior->perturb(background, rng);
+        }
 
         // propose new instrument offsets
         if (data._multi)
@@ -788,6 +795,13 @@ double RVHGPMmodel::log_likelihood() const
             if (jitter_propto_indicator)
                 var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
 
+            //if (marginalize_C) {
+            //    logL += marginalized_C_log_likelihood_studentT();
+            //}
+            //else {
+            //    logL += c_nu - 0.5*log(var) - 0.5*(nu + 1.)*log(1. + pow(y[i] - mu[i], 2)/var/nu);
+            //}
+
             logL += c_nu - 0.5*log(var) - 0.5*(nu + 1.)*log(1. + pow(y[i] - mu[i], 2)/var/nu);
         }
 
@@ -810,8 +824,13 @@ double RVHGPMmodel::log_likelihood() const
 
             if (jitter_propto_indicator)
                 var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
-
-            logL += - halflog2pi - 0.5*log(var) - 0.5*(pow(y[i] - mu[i], 2)/var);
+            
+            if (marginalize_C) {
+                logL += marginalized_C_log_likelihood_gauss(y[i], mu[i], var);
+            }
+            else {
+                logL += - halflog2pi - 0.5*log(var) - 0.5*(pow(y[i] - mu[i], 2)/var);
+            }
         }
 
     }
@@ -944,6 +963,36 @@ double RVHGPMmodel::marginalised_barycenter_log_likelihood() const
     return logL_marg;
 }
 
+double RVHGPMmodel::marginalized_C_log_likelihood_gauss(double RVobs, double RVmu, double vari) const
+{
+    //going to implement the calculation of the 
+    // log-likelihood after marginalizing over the systemic velocity,
+    // in the case of a Gaussian likelihood
+
+    // following the approach used in Equations 27 through
+    // 30 of Brandt et al. 2021 (but adapted to only marginalize
+    // over the systemic velocity, not the offset of every instrument too)
+
+    double A_brandt = 1.0 / vari;
+
+    double RVresids = RVobs - RVmu;
+    
+    double B_brandt = 2.0 * RVresids / vari;
+    double C_brandt = RVresids * RVresids / vari;
+
+    double chi2_eff = log(A_brandt) + C_brandt - (B_brandt * B_brandt / (4.0 * A_brandt)); 
+
+    double logL_margC = (-0.5 * chi2_eff) - (0.5*log(vari)) - halflog2pi;
+
+    return logL_margC;
+}
+
+// double RVHGPMmodel::marginalized_C_log_likelihood_studentT() const
+// {
+    //going to implement the calculation of the 
+    // log-likelihood after marginalizing over the systemic velocity,
+    // in the case of a Student t likelihood 
+//}
 
 void RVHGPMmodel::print(std::ostream& out) const
 {
@@ -1312,6 +1361,7 @@ class RVHGPMmodel_publicist : public RVHGPMmodel
         using RVHGPMmodel::jitter_propto_indicator;
         using RVHGPMmodel::jitter_propto_indicator_index;
         using RVHGPMmodel::marginalise_barycenter;
+        using RVHGPMmodel::marginalize_C;
 };
 
 
@@ -1385,6 +1435,8 @@ NB_MODULE(RVHGPMmodel, m) {
 
         .def_rw("marginalise_barycenter", &RVHGPMmodel_publicist::marginalise_barycenter, 
                 "Analytically marginalise the barycenter proper motion mu_ra, mu_dec")
+        .def_rw("marginalize_C", &RVHGPMmodel_publicist::marginalize_C,
+                "Marginalize the systemic velocity C")
 
         // // to un/pickle RVHGPMmodel
         // .def("__getstate__", [](const RVHGPMmodel &m)
