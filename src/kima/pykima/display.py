@@ -1774,6 +1774,8 @@ def hist_vsys(res, ax=None, show_offsets=True, show_other=False,
         ax2.set(xlabel='vsys_sec' + units, title=title2)
 
     if show_prior:
+        if hasattr(res, 'marginalize_C') and res.marginalize_C:
+            warnings.warn('marginalise_C=True, Cprior is ignored!')
         try:
             prior = res.priors['Cprior']
         except KeyError:

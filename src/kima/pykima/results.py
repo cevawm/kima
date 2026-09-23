@@ -883,6 +883,7 @@ class KimaResults:
         if self.model is MODELS.RVHGPMmodel:
             self.marginalise_barycenter = model.marginalise_barycenter
             self._read_pm()
+            self.marginalize_C = model.marginalize_C
 
         if self.model in (MODELS.RVFWHMmodel, MODELS.RVFWHMRHKmodel):
             self.cfwhm = self.posterior_sample[:, self._current_column]
@@ -908,8 +909,7 @@ class KimaResults:
                 self.vsys_sec = self.posterior_sample[:, -2]
                 self.indices['vsys_sec'] = -2
         if self.data_type == 'RV':
-            self.vsys = self.posterior_sample[:, -1]
-            self.indices['vsys'] = -1
+            self._read_sys_vel()
 
         # build the marginal posteriors for planet parameters
         self.get_marginals()
@@ -1147,6 +1147,15 @@ class KimaResults:
             # TODO: is this the best place to do this?
             self.posterior_sample[:, self.indices['pm_ra_bary']] = x[:, 0]
             self.posterior_sample[:, self.indices['pm_dec_bary']] = x[:, 1]
+
+    def _read_sys_vel(self):
+        self.indices['vsys'] = -1
+
+        if ((self.model is MODELS.RVHGPMmodel) and self.marginalize_C):
+            z = self.sample_C_postprocess()
+            self.posterior_sample[:, self.indices['vsys']] = z
+            
+        self.vsys = self.posterior_sample[:, self.indices['vsys']]
 
     @property
     def _GP_par_indices(self):
@@ -2842,7 +2851,7 @@ class KimaResults:
         ttGP.sort()  # in-place
         return ttGP
 
-    def eval_model(self, sample, t=None, include_planets=True, 
+    def eval_model(self, sample, include_C=True, t=None, include_planets=True, 
                    include_known_object=True, include_transiting_planet=True,
                    include_indicator_correlations=True,
                    include_trend=True, single_planet: int = None,
@@ -3097,24 +3106,25 @@ class KimaResults:
         ni = self.n_instruments
 
         # systemic velocity (and C2) for this sample
-        if self.model is MODELS.RVFWHMmodel:
-            C = np.c_[sample[self.indices['vsys']], sample[self.indices['cfwhm']]]
-            v += C.reshape(-1, 1)
-        elif self.model is MODELS.RVFWHMRHKmodel:
-            C = np.c_[sample[self.indices['vsys']], sample[self.indices['cfwhm']], sample[self.indices['crhk']]]
-            v += C.reshape(-1, 1)
-        elif self.model is MODELS.SPLEAFmodel:
-            zp = sample[self.indices['zero_points']]
-            C = np.r_[sample[self.indices['vsys']], zp[ni - 1::ni]]
-            v += C.reshape(-1, 1)
-        elif self.model is MODELS.BINARIESmodel:
-            if self.double_lined:
-                C = np.c_[sample[self.indices['vsys']], sample[self.indices['vsys_sec']]]
+        if include_C:
+            if self.model is MODELS.RVFWHMmodel:
+                C = np.c_[sample[self.indices['vsys']], sample[self.indices['cfwhm']]]
                 v += C.reshape(-1, 1)
-            else:
+            elif self.model is MODELS.RVFWHMRHKmodel:
+                C = np.c_[sample[self.indices['vsys']], sample[self.indices['cfwhm']], sample[self.indices['crhk']]]
+                v += C.reshape(-1, 1)
+            elif self.model is MODELS.SPLEAFmodel:
+                zp = sample[self.indices['zero_points']]
+                C = np.r_[sample[self.indices['vsys']], zp[ni - 1::ni]]
+                v += C.reshape(-1, 1)
+            elif self.model is MODELS.BINARIESmodel:
+                if self.double_lined:
+                    C = np.c_[sample[self.indices['vsys']], sample[self.indices['vsys_sec']]]
+                    v += C.reshape(-1, 1)
+                else:
+                    v += sample[self.indices['vsys']]
+            elif self.model != MODELS.ETVmodel:
                 v += sample[self.indices['vsys']]
-        elif self.model != MODELS.ETVmodel:
-            v += sample[self.indices['vsys']]
 
         # if evaluating at the same times as the data, add instrument offsets
         # otherwise, don't
@@ -3924,6 +3934,46 @@ class KimaResults:
         x_samples = x_hat + (z @ L.T)
 
         return x_samples
+
+    def sample_C_postprocess(self):
+        """
+         
+        Reconstructs the samples of the systemic velocity [C] from the conditional posterior,
+        after it was marginalised out, following the definition of z_hat and sigma_z^2 from
+        Equations 5 and 8 of https://github.com/California-Planet-Search/radvel/files/2507649/Marginalizing_the_likelihood.pdf
+
+        Returns:
+        --------
+        z_samples : np.ndarray, shape (M, 1)
+            Reconstructed systemic velocity samples [C].
+        """
+
+        #need to do this only for the last instrument...I think?  Or was C
+        #indeed added to every point like I originally thought (since the eval_model
+        #function seems to add the C to all points)...?
+        model = np.apply_along_axis(self.eval_model, 1, self.posterior_sample, include_C=False)
+
+        residuals = self.data.y - model
+
+        #getting the variances
+        if self.multi:
+            stellar_jitter = sample[self.indices['jitter']][0]
+            jitter = sample[self.indices['jitter']][self.data.obs]
+            var = self.data.e**2 + stellar_jitter**2 + jitter**2
+        else:
+            jitter = sample[self.indices['jitter']][0]
+            var = self.data.e**2 + jitter**2
+
+        #calculating the variance of the maximum likelihood estimate of C, aka sigma_z^2
+        sigma_z2 = 1.0 / np.sum(1.0 / var)
+
+        z_hat = sigma_z2 * np.sum(residuals / var)
+        
+        #make samples of C from the conditional posterior defined by z_hat and sigma_z^2
+        M = residuals.shape[0]
+        z_samples = np.random.normal(loc=z_hat, scale=np.sqrt(sigma_z2), size=(M, 1))
+
+        return z_samples
 
 
     def individual_logZ(self):
