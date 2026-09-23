@@ -1775,6 +1775,7 @@ def hist_vsys(res, ax=None, show_offsets=True, show_other=False,
 
     if show_prior:
         if hasattr(res, 'marginalize_C') and res.marginalize_C:
+            import warnings
             warnings.warn('marginalise_C=True, Cprior is ignored!')
         try:
             prior = res.priors['Cprior']
@@ -4167,6 +4168,7 @@ def hist_bary(res, show_prior=False):
 
     if show_prior:
         if hasattr(res, 'marginalise_barycenter') and res.marginalise_barycenter:
+            import warnings
             warnings.warn('marginalise_barycenter=True, pm_ra_bary_prior and pm_dec_bary_prior are ignored!')
         prior = res.priors['pm_ra_bary_prior']
         axs[0].hist(distribution_rvs(prior, size=res.ESS), label='prior', **hist_prior_kw)
