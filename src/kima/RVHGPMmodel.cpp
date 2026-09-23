@@ -1207,6 +1207,8 @@ void RVHGPMmodel::save_setup() {
     fout << "apodized_keplerians: " << apodized_keplerians << endl;
     fout << "n_apodized_keplerians: " << n_apodized_keplerians << endl;
     fout << "studentt: " << studentt << endl;
+    fout << "marginalize_C: " << marginalize_C << endl;
+    fout << "marginalise_barycenter: " << marginalise_barycenter << endl;
     fout << "indicator_correlations: " << indicator_correlations << endl;
     fout << "jitter_propto_indicator: " << jitter_propto_indicator << endl;
     fout << "jitter_propto_indicator_index: " << jitter_propto_indicator_index << endl;
