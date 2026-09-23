@@ -755,6 +755,7 @@ double RVHGPMmodel::perturb(RNG& rng)
 double RVHGPMmodel::log_likelihood() const
 {
     size_t N = data.N();
+    size_t num_insts = data.number_instruments;
     const auto& y = data.get_y();
     const auto& sig = data.get_sig();
     const auto& obsi = data.get_obsi();
@@ -825,7 +826,7 @@ double RVHGPMmodel::log_likelihood() const
             if (jitter_propto_indicator)
                 var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
             
-            if (marginalize_C) {
+            if (marginalize_C && obsi[i] == num_insts) {
                 logL += marginalized_C_log_likelihood_gauss(y[i], mu[i], var);
             }
             else {
