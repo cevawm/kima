@@ -2866,7 +2866,7 @@ class KimaResults:
         ttGP.sort()  # in-place
         return ttGP
 
-    def eval_model(self, sample, include_C=True, t=None, include_planets=True, 
+    def eval_model(self, sample, t=None, include_planets=True, include_C=True, 
                    include_known_object=True, include_transiting_planet=True,
                    include_indicator_correlations=True,
                    include_trend=True, single_planet: int = None,
