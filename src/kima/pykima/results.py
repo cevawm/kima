@@ -3944,7 +3944,7 @@ class KimaResults:
 
         Returns:
         --------
-        z_samples : np.ndarray, shape (M, 1)
+        z_samples : np.ndarray, shape (M,)
             Reconstructed systemic velocity samples [C].
         """
 
@@ -3956,22 +3956,23 @@ class KimaResults:
         residuals = self.data.y - model
 
         #getting the variances
+        jitter_samples = self.posterior_sample[:, self.indices['jitter']]
         if self.multi:
-            stellar_jitter = sample[self.indices['jitter']][0]
-            jitter = sample[self.indices['jitter']][self.data.obs]
+            stellar_jitter = jitter_samples[:, 0][:, None]
+            jitter = jitter_samples[:, self.data.obs]
             var = self.data.e**2 + stellar_jitter**2 + jitter**2
         else:
-            jitter = sample[self.indices['jitter']][0]
+            jitter = jitter_samples[:, 0][:, None]
             var = self.data.e**2 + jitter**2
 
         #calculating the variance of the maximum likelihood estimate of C, aka sigma_z^2
-        sigma_z2 = 1.0 / np.sum(1.0 / var)
+        sigma_z2 = 1.0 / np.sum(1.0 / var, axis=1)
 
-        z_hat = sigma_z2 * np.sum(residuals / var)
+        z_hat = sigma_z2 * np.sum(residuals / var, axis=1)
         
         #make samples of C from the conditional posterior defined by z_hat and sigma_z^2
         M = residuals.shape[0]
-        z_samples = np.random.normal(loc=z_hat, scale=np.sqrt(sigma_z2), size=(M, 1))
+        z_samples = np.random.normal(loc=z_hat, scale=np.sqrt(sigma_z2), size=M)
 
         return z_samples
 
