@@ -826,7 +826,7 @@ double RVHGPMmodel::log_likelihood() const
             if (jitter_propto_indicator)
                 var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
             
-            if (marginalize_C && obsi[i] == num_insts) {
+            if (marginalize_C) {
                 logL += marginalized_C_log_likelihood_gauss(y[i], mu[i], var);
             }
             else {
