@@ -1148,13 +1148,21 @@ class KimaResults:
             self.posterior_sample[:, self.indices['pm_ra_bary']] = x[:, 0]
             self.posterior_sample[:, self.indices['pm_dec_bary']] = x[:, 1]
 
+            if self.sample is not None:
+                x_raw = self.sample_barycenter_pm_postprocess(self.sample)
+                self.sample[:, self.indices['pm_ra_bary']] = x_raw[:, 0]
+                self.sample[:, self.indices['pm_dec_bary']] = x_raw[:, 1]
+
     def _read_sys_vel(self):
         self.indices['vsys'] = -1
 
         if ((self.model is MODELS.RVHGPMmodel) and self.marginalize_C):
             z = self.sample_C_postprocess()
             self.posterior_sample[:, self.indices['vsys']] = z
-            
+
+            if self.sample is not None:
+                self.sample[:, self.indices['vsys']] = self.sample_C_postprocess(self.sample)
+
         self.vsys = self.posterior_sample[:, self.indices['vsys']]
 
     @property
@@ -3887,16 +3895,24 @@ class KimaResults:
         model_dec = np.r_[model_dec, model_dec_hg]
         return model_ra, model_dec
 
-    def sample_barycenter_pm_postprocess(self):
+    def sample_barycenter_pm_postprocess(self, samples=None):
         """
         Reconstructs M samples of [μ_ra, μ_dec] from the conditional posterior,
         after they were marginalised out.
-            
+
+        Args:
+            samples (ndarray, optional):
+                Samples for which to reconstruct [μ_ra, μ_dec], shape (M, npar).
+                Defaults to `self.posterior_sample`.
+
         Returns:
         --------
         x_samples : np.ndarray, shape (M, 2)
             Reconstructed barycenter proper motion samples [μ_ra, μ_dec].
         """
+        if samples is None:
+            samples = self.posterior_sample
+
         pm_data = self.pm_data
         D = np.array([
             [pm_data.pm_ra_hip, pm_data.pm_ra_gaia, pm_data.pm_ra_hg], 
@@ -3906,7 +3922,7 @@ class KimaResults:
         sig_dec = np.array([pm_data.sig_hip_dec, pm_data.sig_gaia_dec, pm_data.sig_hg_dec])
         rho = np.array([pm_data.rho_hip, pm_data.rho_gaia, pm_data.rho_hg])
 
-        model = np.apply_along_axis(self.eval_model_hgpm, 1, self.posterior_sample)
+        model = np.apply_along_axis(self.eval_model_hgpm, 1, samples)
 
         residuals = D - model
 
@@ -3950,28 +3966,35 @@ class KimaResults:
 
         return x_samples
 
-    def sample_C_postprocess(self):
+    def sample_C_postprocess(self, samples=None):
         """
          
         Reconstructs the samples of the systemic velocity [C] from the conditional posterior,
         after it was marginalised out, following the definition of z_hat and sigma_z^2 from
         Equations 5 and 8 of https://github.com/California-Planet-Search/radvel/files/2507649/Marginalizing_the_likelihood.pdf
 
+        Args:
+            samples (ndarray, optional):
+                Samples for which to reconstruct C, shape (M, npar). Defaults
+                to `self.posterior_sample`.
+
         Returns:
         --------
         z_samples : np.ndarray, shape (M,)
             Reconstructed systemic velocity samples [C].
         """
+        if samples is None:
+            samples = self.posterior_sample
 
         #need to do this only for the last instrument...I think?  Or was C
         #indeed added to every point like I originally thought (since the eval_model
         #function seems to add the C to all points)...?
-        model = np.apply_along_axis(self.eval_model, 1, self.posterior_sample, include_C=False)
+        model = np.apply_along_axis(self.eval_model, 1, samples, include_C=False)
 
         residuals = self.data.y - model
 
         #getting the variances
-        jitter_samples = self.posterior_sample[:, self.indices['jitter']]
+        jitter_samples = samples[:, self.indices['jitter']]
         if self.multi:
             stellar_jitter = jitter_samples[:, 0][:, None]
             jitter = jitter_samples[:, self.data.obs]
