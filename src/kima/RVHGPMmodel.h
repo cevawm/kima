@@ -306,7 +306,7 @@ class KIMA_API RVHGPMmodel
         double marginalised_barycenter_log_likelihood() const;
 
         /// @brief log-likelihood function after marginalizing over the systemic velocity, in the case of a Gaussian likelihood
-        double marginalized_C_log_likelihood_gauss(double RVobs, double RVmu, double vari) const;
+        double marginalized_C_log_likelihood_gauss(double A, double B, double C, double sum_log_var, size_t N) const;
         /// @brief log-likelihood function after marginalizing over the systemic velocity, in the case of a Student t likelihood
         //double marginalized_C_log_likelihood_studentT() const;
         

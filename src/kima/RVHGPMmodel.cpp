@@ -783,28 +783,54 @@ double RVHGPMmodel::log_likelihood() const
         // The following code calculates the log likelihood
         // in the case of a Gaussian likelihood
         double var, jit;
-        for (size_t i = 0; i < N; i++)
-        {
-            if (data._multi)
+        if (marginalize_C) {
+            // accumulators used if marginalizing the single systemic velocity 
+            double A_brandt = 0.0, B_brandt = 0.0, C_brandt = 0.0, log_var = 0.0;
+            for (size_t i = 0; i < N; i++)
             {
-                jit = jitters[obsi[i] - 1];
-                var = sig[i] * sig[i] + jit * jit + stellar_jitter * stellar_jitter;
-            }
-            else {
-                var = sig[i] * sig[i] + jitter * jitter;
+                if (data._multi)
+                {
+                    jit = jitters[obsi[i] - 1];
+                    var = sig[i] * sig[i] + jit * jit + stellar_jitter * stellar_jitter;
+                }
+                else {
+                    var = sig[i] * sig[i] + jitter * jitter;
+                }
+
+                if (jitter_propto_indicator)
+                    var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
+                
+                A_brandt += 1.0 / var;
+                double RVresid = y[i] - mu[i];
+                B_brandt += 2.0 * RVresid / var;
+                C_brandt += RVresid * RVresid / var;
+                log_var += log(var);
+                
             }
 
-            if (jitter_propto_indicator)
-                var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
+            logL += marginalized_C_log_likelihood_gauss(A_brandt, B_brandt, C_brandt, log_var, N);
             
-            if (marginalize_C) {
-                logL += marginalized_C_log_likelihood_gauss(y[i], mu[i], var);
-            }
-            else {
-                logL += - halflog2pi - 0.5*log(var) - 0.5*(pow(y[i] - mu[i], 2)/var);
-            }
         }
 
+        else {
+            for (size_t i = 0; i < N; i++)
+            {
+                if (data._multi)
+                {
+                    jit = jitters[obsi[i] - 1];
+                    var = sig[i] * sig[i] + jit * jit + stellar_jitter * stellar_jitter;
+                }
+                else {
+                    var = sig[i] * sig[i] + jitter * jitter;
+                }
+
+                if (jitter_propto_indicator)
+                    var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
+                
+                logL += - halflog2pi - 0.5*log(var) - 0.5*(pow(y[i] - mu[i], 2)/var);
+                
+            }
+        }
     }
 
     if (marginalise_barycenter) {
@@ -935,7 +961,7 @@ double RVHGPMmodel::marginalised_barycenter_log_likelihood() const
     return logL_marg;
 }
 
-double RVHGPMmodel::marginalized_C_log_likelihood_gauss(double RVobs, double RVmu, double vari) const
+double RVHGPMmodel::marginalized_C_log_likelihood_gauss(double A, double B, double C, double sum_log_var, size_t N) const
 {
     //going to implement the calculation of the 
     // log-likelihood after marginalizing over the systemic velocity,
@@ -945,16 +971,9 @@ double RVHGPMmodel::marginalized_C_log_likelihood_gauss(double RVobs, double RVm
     // 30 of Brandt et al. 2021 (but adapted to only marginalize
     // over the systemic velocity, not the offset of every instrument too)
 
-    double A_brandt = 1.0 / vari;
+    double chi2_eff = log(A) + C - ((B * B) / (4.0 * A));
 
-    double RVresids = RVobs - RVmu;
-    
-    double B_brandt = 2.0 * RVresids / vari;
-    double C_brandt = RVresids * RVresids / vari;
-
-    double chi2_eff = log(A_brandt) + C_brandt - (B_brandt * B_brandt / (4.0 * A_brandt)); 
-
-    double logL_margC = (-0.5 * chi2_eff) - (0.5*log(vari)) - halflog2pi;
+    double logL_margC = (-0.5 * chi2_eff) - (0.5 * sum_log_var) - ((double(N) - 1.0) * halflog2pi);
 
     return logL_margC;
 }
