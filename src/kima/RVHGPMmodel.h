@@ -308,7 +308,7 @@ class KIMA_API RVHGPMmodel
         /// @brief log-likelihood function after marginalizing over the systemic velocity, in the case of a Gaussian likelihood
         double marginalized_C_log_likelihood_gauss(double A, double B, double C, double sum_log_var, size_t N) const;
         /// @brief log-likelihood function after marginalizing over the systemic velocity, in the case of a Student t likelihood
-        //double marginalized_C_log_likelihood_studentT() const;
+        double marginalized_C_log_likelihood_studentT(const std::vector<double>& resid, const std::vector<double>& var, size_t N) const;
         
         // Print parameters to stream
         void print(std::ostream& out) const;

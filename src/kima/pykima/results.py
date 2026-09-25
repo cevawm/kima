@@ -3973,6 +3973,11 @@ class KimaResults:
         after it was marginalised out, following the definition of z_hat and sigma_z^2 from
         Equations 5 and 8 of https://github.com/California-Planet-Search/radvel/files/2507649/Marginalizing_the_likelihood.pdf
 
+        However, for a Student-t likelihood there is no closed-form conditional posterior for C, so
+        this instead reuses the same EM mode-finding + Laplace curvature approximation as
+        RVHGPMmodel::marginalized_C_log_likelihood_studentT on the C++ side, so that the
+        reconstructed samples are consistent with what the sampler actually explored.
+
         Args:
             samples (ndarray, optional):
                 Samples for which to reconstruct C, shape (M, npar). Defaults
@@ -4003,10 +4008,28 @@ class KimaResults:
             jitter = jitter_samples[:, 0][:, None]
             var = self.data.e**2 + jitter**2
 
-        #calculating the variance of the maximum likelihood estimate of C, aka sigma_z^2
-        sigma_z2 = 1.0 / np.sum(1.0 / var, axis=1)
+        if self.studentt:
+            # EM iteration (E-step weight, M-step weighted mean) to find the
+            # mode of C, then a Laplace (Gaussian) approximation around it
+            nu = samples[:, self.indices['nu']][:, None]
+            z_hat = np.sum(residuals / var, axis=1) / np.sum(1.0 / var, axis=1)
+            for _ in range(100):
+                d = residuals - z_hat[:, None]
+                w = (nu + 1.0) / (nu + d**2 / var)
+                z_new = np.sum(w * residuals / var, axis=1) / np.sum(w / var, axis=1)
+                if np.all(np.abs(z_new - z_hat) < 1e-10 * np.maximum(1.0, np.abs(z_hat))):
+                    z_hat = z_new
+                    break
+                z_hat = z_new
 
-        z_hat = sigma_z2 * np.sum(residuals / var, axis=1)
+            d = residuals - z_hat[:, None]
+            q = nu * var + d**2
+            curvature = np.sum((nu + 1.0) * (d**2 - nu * var) / q**2, axis=1)
+            sigma_z2 = -1.0 / curvature
+        else:
+            #calculating the variance of the maximum likelihood estimate of C, aka sigma_z^2
+            sigma_z2 = 1.0 / np.sum(1.0 / var, axis=1)
+            z_hat = sigma_z2 * np.sum(residuals / var, axis=1)
         
         #make samples of C from the conditional posterior defined by z_hat and sigma_z^2
         M = residuals.shape[0]
