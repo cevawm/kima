@@ -781,29 +781,50 @@ double RVHGPMmodel::log_likelihood() const
         double c_nu = std::lgamma(0.5*(nu + 1.)) - std::lgamma(0.5*nu) - 0.5*log(M_PI*nu);
         
         double var, jit;
-        for(size_t i=0; i<N; i++)
-        {
-            if(data._multi) 
+        if (marginalize_C) {
+            // no closed-form sufficient statistics exist here (unlike the
+            // Gaussian case), so pass the full per-point resid/var arrays
+            std::vector<double> resid(N), vars(N);
+            for(size_t i=0; i<N; i++)
             {
-                jit = jitters[obsi[i]-1];
-                var = sig[i]*sig[i] + jit*jit + stellar_jitter*stellar_jitter;
+                if(data._multi) 
+                {
+                    jit = jitters[obsi[i]-1];
+                    var = sig[i]*sig[i] + jit*jit + stellar_jitter*stellar_jitter;
+                }
+                else
+                {
+                    var = sig[i]*sig[i] + jitter*jitter;
+                }
+
+                if (jitter_propto_indicator)
+                    var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
+
+                resid[i] = y[i] - mu[i];
+                vars[i] = var;
             }
-            else
+
+            logL += marginalized_C_log_likelihood_studentT(resid, vars, N);
+        }
+        
+        else {
+            for(size_t i=0; i<N; i++)
             {
-                var = sig[i]*sig[i] + jitter*jitter;
+                if(data._multi) 
+                {
+                    jit = jitters[obsi[i]-1];
+                    var = sig[i]*sig[i] + jit*jit + stellar_jitter*stellar_jitter;
+                }
+                else
+                {
+                    var = sig[i]*sig[i] + jitter*jitter;
+                }
+
+                if (jitter_propto_indicator)
+                    var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
+
+                logL += c_nu - 0.5*log(var) - 0.5*(nu + 1.)*log(1. + pow(y[i] - mu[i], 2)/var/nu);
             }
-
-            if (jitter_propto_indicator)
-                var += pow(jitter_propto_indicator_slope * normalized_actind[jitter_propto_indicator_index][i], 2);
-
-            //if (marginalize_C) {
-            //    logL += marginalized_C_log_likelihood_studentT();
-            //}
-            //else {
-            //    logL += c_nu - 0.5*log(var) - 0.5*(nu + 1.)*log(1. + pow(y[i] - mu[i], 2)/var/nu);
-            //}
-
-            logL += c_nu - 0.5*log(var) - 0.5*(nu + 1.)*log(1. + pow(y[i] - mu[i], 2)/var/nu);
         }
 
     }
@@ -1007,12 +1028,74 @@ double RVHGPMmodel::marginalized_C_log_likelihood_gauss(double A, double B, doub
     return logL_margC;
 }
 
-// double RVHGPMmodel::marginalized_C_log_likelihood_studentT() const
-// {
-    //going to implement the calculation of the 
-    // log-likelihood after marginalizing over the systemic velocity,
-    // in the case of a Student t likelihood 
-//}
+ double RVHGPMmodel::marginalized_C_log_likelihood_studentT(const std::vector<double>& resid, const std::vector<double>& var, size_t N) const
+ {
+    // Unlike the Gaussian case, this has no closed form: the Gaussian
+    // marginalization works because summing quadratics-in-C in the exponent
+    // (completing the square) turns a product of Gaussians into another
+    // Gaussian, but here log(1 + a) + log(1 + b) != log(1 + (a+b)), so a
+    // product of Student-t kernels in C does not collapse into a single
+    // Student-t (or any standard) kernel and the integral over C has no
+    // elementary antiderivative for N > 1 data points.
+    //
+    // Instead we (1) find the mode of log L(C) with the EM/IRLS iteration of
+    // Lange, Little & Taylor (1989) -- exact, guaranteed to converge -- and
+    // (2) apply Laplace's method, approximating the integral over C by a
+    // Gaussian using the curvature of log L(C) at that mode. This is an
+    // approximation (unlike marginalized_C_log_likelihood_gauss), and it is
+    // only expected to be accurate when N is not too small.
+
+    // initial guess for the mode: variance-weighted mean of the residuals
+    double C = 0.0, wsum = 0.0;
+    for (size_t i = 0; i < N; i++)
+    {
+        C += resid[i] / var[i];
+        wsum += 1.0 / var[i];
+    }
+    C /= wsum;
+
+    // E-step: weight_i = E[mixing variable_i | C]; M-step: weighted least
+    // squares update of C; repeat until convergence (monotonically increases
+    // log L(C))
+    for (int iter = 0; iter < 100; iter++)
+    {
+        double num = 0.0, den = 0.0;
+        for (size_t i = 0; i < N; i++)
+        {
+            double d = resid[i] - C;
+            double w = (nu + 1.0) / (nu + d * d / var[i]);
+            num += w * resid[i] / var[i];
+            den += w / var[i];
+        }
+        double Cnew = num / den;
+        double scale = std::abs(C) > 1.0 ? std::abs(C) : 1.0;
+        if (std::abs(Cnew - C) < 1e-10 * scale)
+        {
+            C = Cnew;
+            break;
+        }
+        C = Cnew;
+    }
+
+    // log L(C) and its curvature d^2/dC^2 log L(C) at the mode found above
+    double c_nu = std::lgamma(0.5 * (nu + 1.0)) - std::lgamma(0.5 * nu) - 0.5 * log(M_PI * nu);
+    double logL_hat = 0.0, curvature = 0.0;
+    for (size_t i = 0; i < N; i++)
+    {
+        double d = resid[i] - C;
+        double q = nu * var[i] + d * d;
+        logL_hat += c_nu - 0.5 * log(var[i]) - 0.5 * (nu + 1.0) * log(q / (nu * var[i]));
+        curvature += (nu + 1.0) * (d * d - nu * var[i]) / (q * q);
+    }
+
+    // Laplace's method requires a proper maximum (negative curvature)
+    if (curvature >= 0.0)
+        return -std::numeric_limits<double>::infinity();
+
+    double logL_margC = logL_hat + 0.5 * log(2.0 * M_PI / (-curvature));
+
+    return logL_margC;
+}
 
 void RVHGPMmodel::print(std::ostream& out) const
 {
