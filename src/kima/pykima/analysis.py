@@ -1480,7 +1480,7 @@ def reorder_P5(res, replace=False, until_detected=True,
 
     # make a copy of the posterior samples
     new_posterior = deepcopy(res.posteriors)
-    fields = ('e', 'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
+    fields = ('e', 'φ', 'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
     # the maximum likelihood sample will serve as reference
     p = res.maximum_likelihood_sample(printit=False)
 
@@ -1504,7 +1504,7 @@ def reorder_P5(res, replace=False, until_detected=True,
     errorK = new_posterior.K[logL > np.percentile(logL, 84)].std(axis=0)
     # errore = new_posterior.e[logL > np.percentile(logL, 84)].std(axis=0)
     errorw = new_posterior.w[logL > np.percentile(logL, 84)].std(axis=0)
-    errorphi = new_posterior.φ[logL > np.percentile(logL, 84)].std(axis=0)
+    # errorphi = new_posterior.φ[logL > np.percentile(logL, 84)].std(axis=0)
 
     # do reordering for all planets or until detected
     maximum = np_bayes_factor_threshold(res) if until_detected else res.npmax - 1
@@ -1517,14 +1517,14 @@ def reorder_P5(res, replace=False, until_detected=True,
         refK = p[res.indices['planets.K']][j]
         # refe = p[res.indices['planets.e']][j]
         refw = p[res.indices['planets.w']][j]
-        refphi = p[res.indices['planets.φ']][j]
+        # refphi = p[res.indices['planets.φ']][j]
         # for each sample
-        for i, (sP, sK, sw, sphi) in enumerate(tqdm(zip(new_posterior.P, new_posterior.K, new_posterior.w, new_posterior.φ), total=res.ESS)):
+        for i, (sP, sK, sw) in enumerate(tqdm(zip(new_posterior.P, new_posterior.K, new_posterior.w), total=res.ESS)):
             sP = sP[j:]
             sK = sK[j:]
             # se = new_posterior.e[i, j:]
             sw = new_posterior.w[i, j:]
-            sphi = new_posterior.φ[i, j:]
+            # sphi = new_posterior.φ[i, j:]
             dist = [
                 np.linalg.norm(
                     np.stack([
@@ -1532,7 +1532,7 @@ def reorder_P5(res, replace=False, until_detected=True,
                         (sK[perm - j] - refK)[0] / errorK[j],
                         # (se[perm - j] - refe)[0] / errore[j],
                         (sw[perm - j] - refw)[0] / errorw[j],
-                        (sphi[perm - j] - refphi)[0] / errorphi[j]
+                        # (sphi[perm - j] - refphi)[0] / errorphi[j]
                     ], axis=-1),
                 axis=-1)
                 for perm in perms
@@ -1542,7 +1542,7 @@ def reorder_P5(res, replace=False, until_detected=True,
             new_posterior.K[i, j:] = sK[perm - j]
             # new_posterior.e[i, j:] = se[perm - j]
             new_posterior.w[i, j:] = sw[perm - j]
-            new_posterior.φ[i, j:] = sphi[perm - j]
+            # new_posterior.φ[i, j:] = sphi[perm - j]
             for field in fields:
                 try:
                     arr = getattr(new_posterior, field)
