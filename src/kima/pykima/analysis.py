@@ -1480,7 +1480,7 @@ def reorder_P5(res, replace=False, until_detected=True,
 
     # make a copy of the posterior samples
     new_posterior = deepcopy(res.posteriors)
-    fields = ('w', 'φ', 'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
+    fields = ('e', 'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
     # the maximum likelihood sample will serve as reference
     p = res.maximum_likelihood_sample(printit=False)
 
