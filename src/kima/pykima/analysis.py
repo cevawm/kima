@@ -1549,15 +1549,25 @@ def reorder_P5(res, replace=False, until_detected=True,
         sort_idx = np.argsort(p[res.indices['planets.P']])
         new_posterior.P = new_posterior.P[:, sort_idx]
         new_posterior.K = new_posterior.K[:, sort_idx]
-        # new_posterior.e = new_posterior.e[:, sort_idx]
-        # new_posterior.w = new_posterior.w[:, sort_idx]
-        # new_posterior.φ = new_posterior.φ[:, sort_idx]
-        for field in fields:
-            try:
-                arr = getattr(new_posterior, field)
-                arr = arr[:, sort_idx]
-            except AttributeError:
-                pass
+        new_posterior.e = new_posterior.e[:, sort_idx]
+        new_posterior.w = new_posterior.w[:, sort_idx]
+        new_posterior.φ = new_posterior.φ[:, sort_idx]
+        if res.model is MODELS.RVHGPMmodel:
+            new_posterior.i = new_posterior.i[:, sort_idx]
+            new_posterior.i_deg = new_posterior.i_deg[:, sort_idx]
+            new_posterior.W = new_posterior.W[:, sort_idx]
+            new_posterior.W_deg = new_posterior.W_deg[:, sort_idx]
+            new_posterior.Ω = new_posterior.Ω[:, sort_idx]
+            new_posterior.Ω_deg = new_posterior.Ω_deg[:, sort_idx]
+
+
+
+        # for field in fields:
+        #     try:
+        #         arr = getattr(new_posterior, field)
+        #         arr = arr[:, sort_idx]
+        #     except AttributeError:
+        #         pass
 
     if replace:
         res.posteriors = new_posterior
