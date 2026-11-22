@@ -1479,7 +1479,8 @@ def reorder_P5_and_sort(res, replace=False):
 
 
 def reorder_P5(res, replace=False, until_detected=True,
-               sort_maximum_likelihood_by_K=True):
+               sort_maximum_likelihood_by_K=True,
+               sort_by_P_after_reorder=False):
     from itertools import permutations
     from copy import deepcopy
     from tqdm import tqdm
@@ -1488,8 +1489,7 @@ def reorder_P5(res, replace=False, until_detected=True,
 
     # make a copy of the posterior samples
     new_posterior = deepcopy(res.posteriors)
-    fields = ('e', 'w', 'φ',
-              'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
+    fields = ('i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
     # the maximum likelihood sample will serve as reference
     p = res.maximum_likelihood_sample(printit=False)
 
@@ -1511,6 +1511,9 @@ def reorder_P5(res, replace=False, until_detected=True,
     logL = res.posterior_lnlike[:, 1]
     errorP = new_posterior.P[logL > np.percentile(logL, 84)].std(axis=0)
     errorK = new_posterior.K[logL > np.percentile(logL, 84)].std(axis=0)
+    errore = new_posterior.e[logL > np.percentile(logL, 84)].std(axis=0)
+    errorw = new_posterior.w[logL > np.percentile(logL, 84)].std(axis=0)
+    errorphi = new_posterior.φ[logL > np.percentile(logL, 84)].std(axis=0)
 
     # do reordering for all planets or until detected
     maximum = np_bayes_factor_threshold(res) if until_detected else res.npmax - 1
@@ -1518,29 +1521,58 @@ def reorder_P5(res, replace=False, until_detected=True,
     for j in range(maximum):
         # all possible permutations of the columns after the jth
         perms = list(map(np.array, permutations(range(j, res.npmax))))
-        # reference period and semi-amplitude
+        # reference RV orbital parameters
         refP = p[res.indices['planets.P']][j]
         refK = p[res.indices['planets.K']][j]
+        refe = p[res.indices['planets.e']][j]
+        refw = p[res.indices['planets.w']][j]
+        refphi = p[res.indices['planets.φ']][j]
         # for each sample
-        for i, (sP, sK) in enumerate(tqdm(zip(new_posterior.P, new_posterior.K), total=res.ESS)):
+        for i, (sP, sK, se, sw, sphi) in enumerate(tqdm(zip(new_posterior.P, new_posterior.K, new_posterior.e, new_posterior.w, new_posterior.φ), total=res.ESS)):
             sP = sP[j:]
             sK = sK[j:]
+            se = se[j:]
+            sw = sw[j:]
+            sphi = sphi[j:]
             dist = [
-                np.hypot(
-                    (sP[perm - j] - refP)[0] / errorP[j],
-                    (sK[perm - j] - refK)[0] / errorK[j]
-                )
+                np.linalg.norm(
+                    np.stack([
+                        (sP[perm - j] - refP)[0] / errorP[j],
+                        (sK[perm - j] - refK)[0] / errorK[j],
+                        (se[perm - j] - refe)[0] / errore[j],
+                        (sw[perm - j] - refw)[0] / errorw[j],
+                        (sphi[perm - j] - refphi)[0] / errorphi[j]
+                    ], axis=-1),
+                axis=-1)
                 for perm in perms
             ]
             perm = perms[np.argmin(np.abs(dist))]
             new_posterior.P[i, j:] = sP[perm - j]
             new_posterior.K[i, j:] = sK[perm - j]
+            new_posterior.e[i, j:] = se[perm - j]
+            new_posterior.w[i, j:] = sw[perm - j]
+            new_posterior.φ[i, j:] = sphi[perm - j]
             for field in fields:
                 try:
                     arr = getattr(new_posterior, field)
                     arr[i, j:] = arr[i, j:][perm - j]
                 except AttributeError:
                     pass
+
+    if sort_by_P_after_reorder:  #should only do this for kima results where Np is fixed
+        sort_idx = np.argsort(p[res.indices['planets.P']])
+        new_posterior.P = new_posterior.P[:, sort_idx]
+        new_posterior.K = new_posterior.K[:, sort_idx]
+        new_posterior.e = new_posterior.e[:, sort_idx]
+        new_posterior.w = new_posterior.w[:, sort_idx]
+        new_posterior.φ = new_posterior.φ[:, sort_idx]
+        for field in fields:
+            try:
+                arr = getattr(new_posterior, field)
+                arr = arr[:, sort_idx]
+            except AttributeError:
+                pass
+
     if replace:
         res.posteriors = new_posterior
 
