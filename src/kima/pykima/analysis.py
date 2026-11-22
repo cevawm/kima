@@ -1535,10 +1535,15 @@ def reorder_P5(res, replace=False, until_detected=True,
             # sw = sw[j:]
             # sphi = sphi[j:]
             dist = [
-                np.hypot(
-                    (sP[perm - j] - refP)[0] / errorP[j],
-                    (sK[perm - j] - refK)[0] / errorK[j]
-                )
+                np.linalg.norm(
+                    np.stack([
+                        (sP[perm - j] - refP)[0] / errorP[j],
+                        (sK[perm - j] - refK)[0] / errorK[j],
+                        # (se[perm - j] - refe)[0] / errore[j],
+                        # (sw[perm - j] - refw)[0] / errorw[j],
+                        # (sphi[perm - j] - refphi)[0] / errorphi[j]
+                    ], axis=-1),
+                axis=-1)
                 for perm in perms
             ]
             perm = perms[np.argmin(np.abs(dist))]
@@ -1569,14 +1574,6 @@ def reorder_P5(res, replace=False, until_detected=True,
             new_posterior.Ω = new_posterior.Ω[:, sort_idx]
             new_posterior.Ω_deg = new_posterior.Ω_deg[:, sort_idx]
 
-
-
-        # for field in fields:
-        #     try:
-        #         arr = getattr(new_posterior, field)
-        #         arr = arr[:, sort_idx]
-        #     except AttributeError:
-        #         pass
 
     if replace:
         res.posteriors = new_posterior
