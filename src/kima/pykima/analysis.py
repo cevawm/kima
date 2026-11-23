@@ -1469,102 +1469,273 @@ def reorder_P5_and_sort(res, replace=False):
     return new_posterior
 
 
+# degrees of freedom of the Student-t cost used to relabel the posterior samples
+_RELABEL_DOF = 4.0
+
+# per-companion posterior arrays that have to follow every relabelling
+_PER_PLANET_FIELDS = ('P', 'K', 'e', 'w', 'ω', 'w_deg', 'ω_deg', 'φ', '_phi', 'φ_deg', 'Tp',
+                      'i', 'i_deg', 'W', 'Ω', 'W_deg', 'Ω_deg')
+
+
+def _relabelling_features(parameters, P, K, e, w, phi, active):
+    """
+    Features in which the Euclidean distance between two companions is meaningful.
+
+    Strictly positive quantities enter as logarithms and angles as (cos, sin)
+    pairs, so nothing depends on where an angle wraps around. The mean longitude
+    λ = ω + φ is used instead of ω and φ because, unlike them, it stays well
+    defined when the orbit is (nearly) circular.
+    """
+    columns = []
+    for name in parameters:
+        if name == 'P':
+            columns.append(np.log(np.where(active, P, 1.0)))
+        elif name == 'K':
+            columns.append(np.log1p(np.where(active, K, 0.0)))
+        elif name == 'e':
+            columns.append(e)
+        elif name == 'ecosw':
+            columns += [e * np.cos(w), e * np.sin(w)]
+        elif name == 'lambda':
+            columns += [np.cos(w + phi), np.sin(w + phi)]
+        else:
+            raise ValueError(f"unknown parameter '{name}' for the relabelling, "
+                             "choose from 'P', 'K', 'e', 'ecosw' and 'lambda'")
+    features = np.stack(columns, axis=-1)
+    features[~active] = 0.0
+    return features
+
+
+def _robust_scale(x):
+    """Standard deviation estimated from the median absolute deviation (along axis 0)"""
+    return 1.4826 * np.median(np.abs(x - np.median(x, axis=0)), axis=0)
+
+
+def _label_statistics(X, active, perm, n_track, floor):
+    """Center and robust width, in every feature, of each of the tracked labels"""
+    labelled = np.take_along_axis(X, perm[:, :, None], axis=1)
+    present = np.take_along_axis(active, perm, axis=1)
+    centers = np.zeros(X.shape[1:])
+    scales = np.full(X.shape[1:], np.inf)
+    for k in range(n_track):
+        if present[:, k].sum() > 4:
+            x = labelled[present[:, k], k]
+            centers[k] = np.median(x, axis=0)
+            scales[k] = np.maximum(_robust_scale(x), floor)
+    return centers, scales
+
+
+def _label_assignment(X, active, centers, scales, n_track, perms):
+    """
+    Best one-to-one assignment of the companions of every sample to the labels.
+
+    The cost of putting a companion in a label is the (Student-t) negative log
+    likelihood of its features, given the center and width of the label. Absent
+    companions and labels that are not tracked cost nothing. All the
+    permutations `perms` are tried (exact), unless there are too many of them
+    and each sample is solved as a linear assignment problem instead.
+
+    Returns the permutation of every sample (perm[s, k] is the companion placed
+    in label k), its cost, and its probability among all the permutations
+    of that sample (nan if they are not enumerated).
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    n, m, F = X.shape
+    index = np.arange(m)
+    perm = np.empty((n, m), dtype=np.intp)
+    cost = np.empty(n)
+    probability = np.full(n, np.nan)
+    step = max(1, int(4e6 // max(m * m * F, 1 if perms is None else len(perms) * m)))
+    for start in range(0, n, step):
+        sl = slice(start, start + step)
+        z = (X[sl, :, None, :] - centers) / scales
+        c = (_RELABEL_DOF + F) * np.log1p(np.einsum('cakf,cakf->cak', z, z) / _RELABEL_DOF)
+        c[~active[sl]] = 0.0
+        c[:, :, n_track:] = 0.0
+        if perms is None:
+            for s, cs in enumerate(c, start):
+                rows, cols = linear_sum_assignment(cs)
+                perm[s, cols] = rows
+                cost[s] = cs[rows, cols].sum()
+        else:
+            total = c[:, perms, index].sum(-1)
+            best = total.argmin(1)
+            perm[sl] = perms[best]
+            cost[sl] = total[np.arange(len(best)), best]
+            probability[sl] = 1 / np.exp((cost[sl, None] - total) / 2).sum(1)
+    return perm, cost, probability
+
+
+def _relabel_components(X, active, P, K, n_track, reference=None, max_iter=50):
+    """
+    Group the companions of all the samples into labels, so that every sample
+    has one companion in each label.
+
+    Starting from a labelling, the center and robust width of every label are
+    estimated, and the companions of each sample are then reassigned to the
+    labels, until the labelling does not change. The starting labellings sort
+    the companions of every sample by period and by semi-amplitude and, if
+    given, by proximity to the `reference` companions (the features of a single
+    sample). The result with the highest classification likelihood is kept.
+
+    Returns the permutation of every sample (perm[s, k] is the companion placed
+    in label k), the centers and widths of the labels, and the probability of
+    the permutation of every sample.
+    """
+    from itertools import permutations
+
+    n, m, F = X.shape
+    perms = np.array(list(permutations(range(m)))) if m <= 6 else None
+    pooled = _robust_scale(X[active])
+    pooled = np.where(pooled > 0, pooled, 1.0)
+    floor = 1e-8 * pooled
+
+    starts = {
+        'P': np.argsort(np.where(active, P, np.inf), axis=1, kind='stable'),
+        'K': np.argsort(np.where(active, -K, np.inf), axis=1, kind='stable'),
+    }
+    if reference is not None and len(reference) > 0:
+        centers = np.zeros((m, F))
+        scales = np.full((m, F), np.inf)
+        centers[:len(reference)] = reference
+        scales[:len(reference)] = pooled
+        starts['reference'] = _label_assignment(X, active, centers, scales, n_track, perms)[0]
+
+    best = None
+    for perm in starts.values():
+        for _ in range(max_iter):
+            centers, scales = _label_statistics(X, active, perm, n_track, floor)
+            new, cost, probability = _label_assignment(X, active, centers, scales, n_track, perms)
+            converged = np.array_equal(new, perm)
+            perm = new
+            if converged:
+                break
+        members = np.take_along_axis(active, perm, axis=1).sum(0)
+        score = cost.sum() + 2 * sum(members[k] * np.log(scales[k]).sum()
+                                     for k in range(n_track) if np.isfinite(scales[k]).all())
+        if best is None or score < best[0]:
+            best = (score, perm, centers, scales, probability)
+    return best[1:]
+
+
+def _label_order(perm, active, P, K, centers, scales, n_track, sort_by_P, reference):
+    """Order in which the labels are stored in the columns of the posterior arrays"""
+    from scipy.optimize import linear_sum_assignment
+
+    present = np.take_along_axis(active, perm, axis=1)
+    labelled = {'P': np.take_along_axis(P, perm, axis=1), 'K': np.take_along_axis(K, perm, axis=1)}
+
+    def median(name, k):
+        values = labelled[name][present[:, k], k]
+        return np.median(values) if values.size else np.nan
+
+    if sort_by_P:
+        order = np.argsort([median('P', k) for k in range(n_track)], kind='stable')
+    elif reference is not None and len(reference) > 0:
+        # the k-th label is the one that contains the k-th companion of the reference sample
+        z = (reference[:, None, :] - centers[None, :n_track]) / scales[None, :n_track]
+        _, matched = linear_sum_assignment((z * z).sum(-1))
+        order = list(matched) + [k for k in range(n_track) if k not in matched]
+    else:
+        order = np.argsort([-median('K', k) for k in range(n_track)], kind='stable')
+    return list(order) + list(range(n_track, perm.shape[1]))
+
+
 def reorder_P5(res, replace=False, until_detected=True,
                sort_maximum_likelihood_by_K=True,
-               sort_by_P_after_reorder=False):
-    from itertools import permutations
+               sort_by_P_after_reorder=False,
+               parameters=('P', 'K', 'ecosw', 'lambda')):
+    """
+    Relabel the posterior samples so that each companion has the same index in
+    every sample.
+
+    In a fit with several companions, the posterior of a given companion can be
+    found in any of the columns of the posterior arrays, and it can change
+    from sample to sample. The companions are the clusters formed by the
+    samples in the space of `parameters`: every cluster is described by the
+    center and the (robust) width of each parameter, and in every sample each
+    companion is assigned to a different cluster, the one it is closest to
+    (in units of the width of the cluster). Clusters and assignments are
+    refined alternately until they no longer change, starting from the
+    labellings by period, by semi-amplitude, and by proximity to the maximum
+    likelihood sample, and the best of them is kept. All the per-companion
+    posteriors (including i, Ω and the derived angles and times) follow the
+    permutation found for each sample.
+
+    Args:
+        res (KimaResults):
+            A results instance
+        replace (bool, optional):
+            Replace `res.posteriors` with the relabelled posteriors
+        until_detected (bool, optional):
+            Only relabel the first Np companions, where Np is the number of
+            companions supported by the data (see `np_bayes_factor_threshold`)
+        sort_maximum_likelihood_by_K (bool, optional):
+            Order the labels like the companions of the maximum likelihood
+            sample sorted by decreasing K, instead of in the order they have in
+            that sample
+        sort_by_P_after_reorder (bool, optional):
+            Order the labels by increasing (median) period instead. This should
+            only be used for kima results where Np is fixed
+        parameters (tuple, optional):
+            The parameters that define the distance between companions. Any of
+            'P', 'K', 'e', 'ecosw' (e cos ω and e sin ω) and 'lambda' (the mean
+            longitude ω + φ at the epoch). Angles enter as their cosine and sine
+
+    Returns:
+        posterior_holder: the relabelled posteriors
+    """
     from copy import deepcopy
-    from tqdm import tqdm
     from warnings import warn
     warn('this function does not change res.posterior_sample even if replace=True')
 
     # make a copy of the posterior samples
     new_posterior = deepcopy(res.posteriors)
-    fields = ('φ', 'i', 'i_deg', 'W', 'W_deg', 'Ω', 'Ω_deg')
-    # the maximum likelihood sample will serve as reference
-    p = res.maximum_likelihood_sample(printit=False)
+    # relabel all the companions or only until the detected ones
+    n_track = min(int(np_bayes_factor_threshold(res)) if until_detected else res.npmax, res.npmax)
 
-    if sort_maximum_likelihood_by_K:
-        sortK = np.argsort(p[res.indices['planets.K']])[::-1]
-        p[res.indices['planets.P']] = p[res.indices['planets.P']][sortK]
-        p[res.indices['planets.K']] = p[res.indices['planets.K']][sortK]
-        p[res.indices['planets.e']] = p[res.indices['planets.e']][sortK]
-        p[res.indices['planets.w']] = p[res.indices['planets.w']][sortK]
-        p[res.indices['planets.φ']] = p[res.indices['planets.φ']][sortK]
-        if res.model is MODELS.RVHGPMmodel:
-            p[res.indices['planets.i']] = p[res.indices['planets.i']][sortK]
-            p[res.indices['planets.W']] = p[res.indices['planets.W']][sortK]
-            # p[res.indices['planets.Ω']] = p[res.indices['planets.Ω']][sortK]
+    if n_track > 0 and res.npmax > 1:
+        # the maximum likelihood sample starts one of the labellings and orders the labels
+        p = res.maximum_likelihood_sample(printit=False)
+        reference = None
+        if p is not None:
+            if sort_maximum_likelihood_by_K:
+                by_K = np.argsort(p[res.indices['planets.K']])[::-1]
+                for name in ('P', 'K', 'e', 'w', 'φ', 'i', 'W'):
+                    index = res.indices.get(f'planets.{name}')
+                    if index is not None:
+                        p[index] = p[index][by_K]
+            res.print_sample(p)
 
-    res.print_sample(p)
+            ref = [p[res.indices[f'planets.{name}']][None] for name in ('P', 'K', 'e', 'w', 'φ')]
+            present = ref[0] > 0
+            reference = _relabelling_features(parameters, *ref, present)[0, present[0]][:n_track]
 
-    # covariance estimation...
-    logL = res.posterior_lnlike[:, 1]
-    errorP = new_posterior.P[logL > np.percentile(logL, 84)].std(axis=0)
-    errorK = new_posterior.K[logL > np.percentile(logL, 84)].std(axis=0)
-    errore = new_posterior.e[logL > np.percentile(logL, 84)].std(axis=0)
-    errorw = new_posterior.w[logL > np.percentile(logL, 84)].std(axis=0)
-    # errorphi = new_posterior.φ[logL > np.percentile(logL, 84)].std(axis=0)
+        P, K = new_posterior.P, new_posterior.K
+        active = P > 0
+        X = _relabelling_features(parameters, P, K, new_posterior.e, new_posterior.w,
+                                  new_posterior.φ, active)
+        perm, centers, scales, probability = _relabel_components(X, active, P, K, n_track, reference)
+        perm = perm[:, _label_order(perm, active, P, K, centers, scales, n_track,
+                                    sort_by_P_after_reorder, reference)]
 
-    # do reordering for all planets or until detected
-    maximum = np_bayes_factor_threshold(res) if until_detected else res.npmax - 1
+        # every per-companion array follows the permutation, once (some are aliases of others)
+        done = set()
+        for name in _PER_PLANET_FIELDS:
+            values = getattr(new_posterior, name, None)
+            if isinstance(values, np.ndarray) and values.shape == P.shape and id(values) not in done:
+                done.add(id(values))
+                values[...] = np.take_along_axis(values, perm, axis=1)
 
-    for j in range(maximum):
-        # all possible permutations of the columns after the jth
-        perms = list(map(np.array, permutations(range(j, res.npmax))))
-        # reference RV orbital parameters
-        refP = p[res.indices['planets.P']][j]
-        refK = p[res.indices['planets.K']][j]
-        refe = p[res.indices['planets.e']][j]
-        refw = p[res.indices['planets.w']][j]
-        # refphi = p[res.indices['planets.φ']][j]
-        # for each sample
-        for i, (sP, sK, se, sw) in enumerate(tqdm(zip(new_posterior.P, new_posterior.K, new_posterior.e, new_posterior.w), total=res.ESS)):
-            sP = sP[j:]
-            sK = sK[j:]
-            se = new_posterior.e[i, j:]
-            sw = new_posterior.w[i, j:]
-            # sphi = new_posterior.φ[i, j:]
-            dist = [
-                np.linalg.norm(
-                    np.stack([
-                        (sP[perm - j] - refP)[0] / errorP[j],
-                        (sK[perm - j] - refK)[0] / errorK[j],
-                        (se[perm - j] - refe)[0] / errore[j],
-                        (sw[perm - j] - refw)[0] / errorw[j],
-                        # (sphi[perm - j] - refphi)[0] / errorphi[j]
-                    ], axis=-1),
-                axis=-1)
-                for perm in perms
-            ]
-            perm = perms[np.argmin(np.abs(dist))]
-            new_posterior.P[i, j:] = sP[perm - j]
-            new_posterior.K[i, j:] = sK[perm - j]
-            new_posterior.e[i, j:] = se[perm - j]
-            new_posterior.w[i, j:] = sw[perm - j]
-            # new_posterior.φ[i, j:] = sphi[perm - j]
-            for field in fields:
-                try:
-                    arr = getattr(new_posterior, field)
-                    arr[i, j:] = arr[i, j:][perm - j]
-                except AttributeError:
-                    pass
-
-    if sort_by_P_after_reorder:  #should only do this for kima results where Np is fixed
-        sort_idx = np.argsort(p[res.indices['planets.P']])
-        new_posterior.P = new_posterior.P[:, sort_idx]
-        new_posterior.K = new_posterior.K[:, sort_idx]
-        new_posterior.e = new_posterior.e[:, sort_idx]
-        new_posterior.w = new_posterior.w[:, sort_idx]
-        new_posterior.φ = new_posterior.φ[:, sort_idx]
-        if res.model is MODELS.RVHGPMmodel:
-            new_posterior.i = new_posterior.i[:, sort_idx]
-            new_posterior.i_deg = new_posterior.i_deg[:, sort_idx]
-            new_posterior.W = new_posterior.W[:, sort_idx]
-            new_posterior.W_deg = new_posterior.W_deg[:, sort_idx]
-            new_posterior.Ω = new_posterior.Ω[:, sort_idx]
-            new_posterior.Ω_deg = new_posterior.Ω_deg[:, sort_idx]
-
+        if n_track == res.npmax and active.all() and np.isfinite(probability).all():
+            ambiguous = np.mean(probability < 0.95)
+            print(f'reorder_P5: {1 - ambiguous:.1%} of the {len(perm)} samples are unambiguously '
+                  f'labelled (using {", ".join(parameters)})')
+            if ambiguous > 0.1:
+                warn(f'reorder_P5: the labelling of {ambiguous:.0%} of the samples is ambiguous. '
+                     'Some companions overlap in the parameter space (or one of them may not be '
+                     'real), so their posteriors cannot be reliably told apart')
 
     if replace:
         res.posteriors = new_posterior
