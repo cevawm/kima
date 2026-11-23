@@ -170,3 +170,108 @@ def test_out_of_order(cleanup_after_running):
         [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 3, 3]
     )
     fig = res.plot_random_samples()
+
+
+def _label_switched_results(companions, n=3000, seed=42):
+    """
+    Fake results with `n` samples of the given companions (dicts with the median
+    period P and semi-amplitude K, and the scatter of their logarithms), which
+    are stored in a random order in each sample. All the other per-companion
+    arrays are simple functions of the period, to detect any of them that does
+    not follow the relabelling.
+    """
+    from types import SimpleNamespace
+    from kima.pykima.results import posterior_holder
+
+    rng = np.random.default_rng(seed)
+    m = len(companions)
+    P = np.column_stack([rng.lognormal(np.log(c['P']), c['sigma_lnP'], n) for c in companions])
+    K = np.column_stack([rng.lognormal(np.log(c['K']), c['sigma_lnK'], n) for c in companions])
+    e = rng.uniform(0, 0.5, (n, m))
+    w = rng.uniform(0, 2 * np.pi, (n, m))
+    phi = rng.uniform(0, 2 * np.pi, (n, m))
+    truth = np.tile(np.arange(m), (n, 1))
+
+    shuffle = np.argsort(rng.random((n, m)), axis=1)
+    P, K, e, w, phi, truth = (np.take_along_axis(x, shuffle, axis=1) for x in (P, K, e, w, phi, truth))
+
+    post = posterior_holder()
+    post.P, post.K, post.e, post.w, post.φ = P, K, e, w, phi
+    # as in KimaResults, some of the arrays are aliases of others
+    post.ω = post.w
+    post.w_deg = post.ω_deg = np.rad2deg(w)
+    post.φ_deg = np.rad2deg(phi)
+    post.Tp = P * phi / (2 * np.pi)
+    post.i, post.i_deg = 0.1 * P, 0.2 * P
+    post.W = post.Ω = 0.3 * P
+    post.W_deg = post.Ω_deg = 0.4 * P
+
+    maximum_likelihood = np.concatenate([P[0], K[0], e[0], w[0], phi[0]])
+    res = SimpleNamespace(
+        posteriors=post, npmax=m, max_components=m, Np=np.full(n, m),
+        indices={f'planets.{name}': slice(k * m, (k + 1) * m)
+                 for k, name in enumerate(('P', 'K', 'e', 'w', 'φ'))},
+        maximum_likelihood_sample=lambda printit=False: maximum_likelihood.copy(),
+        print_sample=lambda p: None,
+    )
+    return res, truth
+
+
+def _relabelling_accuracy(raw, new, truth):
+    """Fraction of the samples in which every companion has the label of its cluster"""
+    from itertools import permutations
+    permutation = (new.P[:, :, None] == raw.P[:, None, :]).argmax(-1)
+    new_truth = np.take_along_axis(truth, permutation, axis=1)
+    m = truth.shape[1]
+    return max(np.mean(np.all(new_truth == r, axis=1)) for r in permutations(range(m)))
+
+
+def test_reorder_P5_companions_with_overlapping_periods():
+    import warnings
+    from kima.pykima.analysis import reorder_P5
+
+    # these can only be told apart by their semi-amplitudes
+    res, truth = _label_switched_results([
+        dict(P=500, sigma_lnP=0.2, K=10, sigma_lnK=0.1),
+        dict(P=500, sigma_lnP=0.2, K=40, sigma_lnK=0.1),
+    ])
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        new = reorder_P5(res, until_detected=False)
+
+    assert _relabelling_accuracy(res.posteriors, new, truth) > 0.99
+    # by default, the labels follow the maximum likelihood sample sorted by decreasing K
+    assert np.mean(new.K[:, 0] > new.K[:, 1]) > 0.99
+
+
+def test_reorder_P5_sort_by_period_and_consistent_arrays():
+    import warnings
+    from kima.pykima.analysis import reorder_P5
+
+    res, truth = _label_switched_results([
+        dict(P=108.5, sigma_lnP=0.001, K=9.7, sigma_lnK=0.08),
+        dict(P=351.6, sigma_lnP=0.002, K=32.9, sigma_lnK=0.04),
+        dict(P=10233, sigma_lnP=0.04, K=93, sigma_lnK=0.04),
+    ])
+    raw = res.posteriors
+    raw_P = raw.P.copy()
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        new = reorder_P5(res, until_detected=False, sort_by_P_after_reorder=True)
+
+    np.testing.assert_array_equal(res.posteriors.P, raw_P)  # replace=False
+    assert _relabelling_accuracy(raw, new, truth) == 1
+    assert np.all(np.diff(new.P, axis=1) > 0)
+
+    # every per-companion array follows the permutation of the periods (and only once)
+    for name, factor in dict(i=0.1, i_deg=0.2, W=0.3, Ω=0.3, W_deg=0.4, Ω_deg=0.4).items():
+        np.testing.assert_array_equal(getattr(new, name), factor * new.P)
+    np.testing.assert_array_equal(new.w_deg, np.rad2deg(new.w))
+    np.testing.assert_array_equal(new.φ_deg, np.rad2deg(new.φ))
+    np.testing.assert_array_equal(new.Tp, new.P * new.φ / (2 * np.pi))
+    assert new.W is new.Ω and new.ω is new.w
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        reorder_P5(res, replace=True, until_detected=False, sort_by_P_after_reorder=True)
+    np.testing.assert_array_equal(res.posteriors.P, new.P)
