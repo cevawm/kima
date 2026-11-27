@@ -3966,7 +3966,7 @@ class KimaResults:
 
         return x_samples
 
-    def sample_C_postprocess(self, samples=None):
+    def sample_C_postprocess(self, samples=None, chunk_size=100_000):
         """
          
         Reconstructs the samples of the systemic velocity [C] from the conditional posterior,
@@ -3982,6 +3982,10 @@ class KimaResults:
             samples (ndarray, optional):
                 Samples for which to reconstruct C, shape (M, npar). Defaults
                 to `self.posterior_sample`.
+            chunk_size (int, optional):
+                Maximum number of samples processed at once. The intermediate
+                arrays have shape (chunk_size, N_data); this ensures that the 
+                memory required to reconstruct C remains reasonable (i.e., not 100s of GB).
 
         Returns:
         --------
@@ -3990,6 +3994,13 @@ class KimaResults:
         """
         if samples is None:
             samples = self.posterior_sample
+
+        # the intermediate arrays below have shape (M, N_data), so process large inputs in chunks
+        if samples.shape[0] > chunk_size:
+            return np.concatenate([
+                self.sample_C_postprocess(samples[i:i + chunk_size], chunk_size)
+                for i in range(0, samples.shape[0], chunk_size)
+            ])
 
         #need to do this only for the last instrument...I think?  Or was C
         #indeed added to every point like I originally thought (since the eval_model
